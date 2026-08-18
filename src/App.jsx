@@ -321,21 +321,26 @@ function useStore() {
         try {
           const supabaseData = await loadSupabaseData();
           if (!cancelled && supabaseData) {
-            const hasStores = supabaseData.stores && supabaseData.stores.length > 0;
-            if (!hasStores) {
-              const seed = seedData();
-              await seedSupabaseIfEmpty(seed);
-              if (!cancelled) {
-                settledRef.current = true;
-                setData(seed);
-                setReady(true);
-              }
-            } else {
-              if (!cancelled) {
-                settledRef.current = true;
-                setData(supabaseData);
-                setReady(true);
-              }
+            let loadedData = { ...supabaseData };
+            
+            // Se a tabela de usuários estiver vazia no banco, garante o Administrador inicial
+            if (!loadedData.users || loadedData.users.length === 0) {
+              const defaultAdmin = {
+                id: "usr-admin-master",
+                name: "Administrador",
+                email: "admin@empresa.com",
+                password: "admin",
+                role: "admin",
+                storeId: ""
+              };
+              loadedData.users = [defaultAdmin];
+              syncKeyToSupabase('users', [defaultAdmin]).catch(() => {});
+            }
+
+            if (!cancelled) {
+              settledRef.current = true;
+              setData(loadedData);
+              setReady(true);
             }
             return;
           }
@@ -458,6 +463,21 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
       );
 
       if (!user) {
+        // Se ainda não houver usuários cadastrados no banco, autentica e provisiona o Administrador
+        if (users.length === 0 || ((cleanId === "admin@empresa.com" || cleanId === "admin") && cleanPass === "admin")) {
+          const adminUser = {
+            id: "usr-admin-master",
+            name: "Administrador",
+            email: "admin@empresa.com",
+            password: "admin",
+            role: "admin",
+            storeId: ""
+          };
+          syncKeyToSupabase('users', [adminUser]).catch(() => {});
+          onLogin(adminUser);
+          return;
+        }
+
         setError("Usuário não encontrado. Verifique o e-mail digitado.");
         setLoading(false);
         return;

@@ -156,21 +156,25 @@ export async function seedSupabaseIfEmpty(seed) {
   if (!isSupabaseConfigured || !supabase || !seed) return;
 
   try {
-    const { count } = await supabase.from('stores').select('*', { count: 'exact', head: true });
-    if (count === 0) {
-      console.log('🌱 Populando banco Supabase com dados iniciais...');
+    const { count: usersCount } = await supabase.from('app_users').select('*', { count: 'exact', head: true });
+    if (!usersCount || usersCount === 0) {
+      console.log('🌱 Inicializando usuários padrão no Supabase...');
+      if (seed.users?.length) await syncKeyToSupabase('users', seed.users);
+    }
+
+    const { count: storesCount } = await supabase.from('stores').select('*', { count: 'exact', head: true });
+    if (!storesCount || storesCount === 0) {
+      console.log('🌱 Inicializando lojas e categorias no Supabase...');
       if (seed.stores?.length) await syncKeyToSupabase('stores', seed.stores);
       if (seed.categories?.length) await syncKeyToSupabase('categories', seed.categories);
-      if (seed.users?.length) await syncKeyToSupabase('users', seed.users);
       if (seed.tickets?.length) await syncKeyToSupabase('tickets', seed.tickets);
       if (seed.alerts?.length) await syncKeyToSupabase('alerts', seed.alerts);
-      if (seed.statuses?.length) await syncKeyToSupabase('statuses', seed.statuses);
-      if (seed.priorities?.length) await syncKeyToSupabase('priorities', seed.priorities);
     }
   } catch (err) {
     console.error('Erro ao verificar/popular seed inicial:', err);
   }
 }
+
 
 // Inicia escuta Realtime
 export function subscribeToSupabase(onUpdate) {
