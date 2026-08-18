@@ -716,6 +716,7 @@ function Dashboard({ data, currentUser, sinceLogin, onGoTickets, onGoAlerts }) {
   const scoped = data.tickets.filter(t => !storeFilter || t.storeId === storeFilter);
   const openTickets = scoped.filter(t => !isClosedStatus(data, t.status));
   const overdue = openTickets.filter(t => t.dueDate && daysDiff(t.dueDate) < 0);
+  const onTime = openTickets.filter(t => !t.dueDate || daysDiff(t.dueDate) >= 0);
   const top = topPriority(data);
   const topOpen = top ? openTickets.filter(t => t.priority === top.id).length : 0;
   const alertsScoped = data.alerts.filter(a => a.status === "ativo" && (!storeFilter || a.storeId === storeFilter));
@@ -755,10 +756,11 @@ function Dashboard({ data, currentUser, sinceLogin, onGoTickets, onGoAlerts }) {
 
       <div className="flex gap-4 mt-6 flex-wrap">
         <KpiCard label="Demandas abertas" value={openTickets.length} onClick={() => onGoTickets({ store: storeFilter, onlyOpen: true })} />
-        <KpiCard label="Atrasadas" value={overdue.length} tone={overdue.length ? "var(--danger)" : "var(--ink)"} onClick={() => onGoTickets({ store: storeFilter, onlyOverdue: true })} />
+        <KpiCard label="Demandas Vencidas" value={overdue.length} tone={overdue.length ? "var(--danger)" : "var(--ink)"} onClick={() => onGoTickets({ store: storeFilter, onlyOverdue: true })} />
+        <KpiCard label="No Prazo (Em dia)" value={onTime.length} tone="var(--ok)" onClick={() => onGoTickets({ store: storeFilter, onlyOpen: true, onlyOnTime: true })} />
         <KpiCard label={top ? `${top.label} em aberto` : "Prioridade crítica"} value={topOpen} tone={topOpen ? top.color : "var(--ink)"} onClick={() => onGoTickets({ store: storeFilter, onlyOpen: true, priority: top?.id })} />
-        <KpiCard label="Alertas nos próx. 30 dias" value={upcomingAlerts.length} tone={upcomingAlerts.length ? "var(--warn)" : "var(--ink)"} onClick={onGoAlerts} />
-        <KpiCard label={isAdmin ? "Atestadas pela loja" : "Atestadas pelo administrador"} value={attestedByOther} tone={attestedByOther ? "var(--warn)" : "var(--ink)"}
+        <KpiCard label="Alertas próx. 30 dias" value={upcomingAlerts.length} tone={upcomingAlerts.length ? "var(--warn)" : "var(--ink)"} onClick={onGoAlerts} />
+        <KpiCard label={isAdmin ? "Atestadas pela loja" : "Atestadas pelo admin"} value={attestedByOther} tone={attestedByOther ? "var(--warn)" : "var(--ink)"}
           onClick={() => onGoTickets({ store: storeFilter, attestedBy: isAdmin ? "loja" : "admin" })} />
       </div>
 
@@ -1199,33 +1201,134 @@ function TicketDetail({ ticket, data, currentUser, onClose, onUpdate, onDelete }
 function TicketsView({ data, update, currentUser, initialFilters, initialOpenId }) {
   const isAdmin = currentUser?.role === "admin";
   const myStoreId = !isAdmin ? (currentUser?.storeId || "") : "";
-  const [q, setQ] = useState("");
-  const [fStore, setFStore] = useState(initialFilters?.store || "");
-  const [fCat, setFCat] = useState(initialFilters?.category || "");
-  const [fStatus, setFStatus] = useState(initialFilters?.status || "");
-  const [fPrio, setFPrio] = useState(initialFilters?.priority || "");
-  const [onlyOpen, setOnlyOpen] = useState(!!initialFilters?.onlyOpen);
-  const [onlyOverdue, setOnlyOverdue] = useState(!!initialFilters?.onlyOverdue);
-  const [attestedByFilter, setAttestedByFilter] = useState(initialFilters?.attestedBy || "");
-  const [fDateFrom, setFDateFrom] = useState(initialFilters?.dateFrom || "");
-  const [fDateTo, setFDateTo] = useState(initialFilters?.dateTo || "");
+
+  // Filtros em rascunho (digitados nos campos antes de clicar em Consultar)
+  const [draftQ, setDraftQ] = useState(initialFilters?.q || "");
+  const [draftStore, setDraftStore] = useState(initialFilters?.store || "");
+  const [draftCat, setDraftCat] = useState(initialFilters?.category || "");
+  const [draftStatus, setDraftStatus] = useState(initialFilters?.status || "");
+  const [draftPrio, setDraftPrio] = useState(initialFilters?.priority || "");
+  const [draftOnlyOpen, setDraftOnlyOpen] = useState(!!initialFilters?.onlyOpen);
+  const [draftOnlyOverdue, setDraftOnlyOverdue] = useState(!!initialFilters?.onlyOverdue);
+  const [draftOnlyOnTime, setDraftOnlyOnTime] = useState(!!initialFilters?.onlyOnTime);
+  const [draftAttestedBy, setDraftAttestedBy] = useState(initialFilters?.attestedBy || "");
+  const [draftDateFrom, setDraftDateFrom] = useState(initialFilters?.dateFrom || "");
+  const [draftDateTo, setDraftDateTo] = useState(initialFilters?.dateTo || "");
+
+  // Filtros efetivamente aplicados na listagem de dados
+  const [applied, setApplied] = useState(() => ({
+    q: initialFilters?.q || "",
+    store: initialFilters?.store || "",
+    category: initialFilters?.category || "",
+    status: initialFilters?.status || "",
+    priority: initialFilters?.priority || "",
+    onlyOpen: !!initialFilters?.onlyOpen,
+    onlyOverdue: !!initialFilters?.onlyOverdue,
+    onlyOnTime: !!initialFilters?.onlyOnTime,
+    attestedBy: initialFilters?.attestedBy || "",
+    dateFrom: initialFilters?.dateFrom || "",
+    dateTo: initialFilters?.dateTo || ""
+  }));
+
   const [showForm, setShowForm] = useState(false);
   const [openTicket, setOpenTicket] = useState(() => initialOpenId ? (data.tickets.find(t => t.id === initialOpenId) || null) : null);
   const [confirmInfo, setConfirmInfo] = useState(null);
 
-  const hasActiveFilter = q || fStore || fCat || fStatus || fPrio || onlyOpen || onlyOverdue || fDateFrom || fDateTo || attestedByFilter;
-  function clearFilters() { setQ(""); setFStore(""); setFCat(""); setFStatus(""); setFPrio(""); setOnlyOpen(false); setOnlyOverdue(false); setFDateFrom(""); setFDateTo(""); setAttestedByFilter(""); }
+  // Sincroniza quando houver navegação vinda do Dashboard
+  useEffect(() => {
+    if (initialFilters) {
+      const next = {
+        q: initialFilters.q || "",
+        store: initialFilters.store || "",
+        category: initialFilters.category || "",
+        status: initialFilters.status || "",
+        priority: initialFilters.priority || "",
+        onlyOpen: !!initialFilters.onlyOpen,
+        onlyOverdue: !!initialFilters.onlyOverdue,
+        onlyOnTime: !!initialFilters.onlyOnTime,
+        attestedBy: initialFilters.attestedBy || "",
+        dateFrom: initialFilters.dateFrom || "",
+        dateTo: initialFilters.dateTo || ""
+      };
+      setDraftQ(next.q);
+      setDraftStore(next.store);
+      setDraftCat(next.category);
+      setDraftStatus(next.status);
+      setDraftPrio(next.priority);
+      setDraftOnlyOpen(next.onlyOpen);
+      setDraftOnlyOverdue(next.onlyOverdue);
+      setDraftOnlyOnTime(next.onlyOnTime);
+      setDraftAttestedBy(next.attestedBy);
+      setDraftDateFrom(next.dateFrom);
+      setDraftDateTo(next.dateTo);
+      setApplied(next);
+    }
+  }, [initialFilters]);
+
+  function handleConsultar() {
+    setApplied({
+      q: draftQ,
+      store: draftStore,
+      category: draftCat,
+      status: draftStatus,
+      priority: draftPrio,
+      onlyOpen: draftOnlyOpen,
+      onlyOverdue: draftOnlyOverdue,
+      onlyOnTime: draftOnlyOnTime,
+      attestedBy: draftAttestedBy,
+      dateFrom: draftDateFrom,
+      dateTo: draftDateTo
+    });
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Enter") {
+      handleConsultar();
+    }
+  }
+
+  function clearFilters() {
+    setDraftQ("");
+    setDraftStore("");
+    setDraftCat("");
+    setDraftStatus("");
+    setDraftPrio("");
+    setDraftOnlyOpen(false);
+    setDraftOnlyOverdue(false);
+    setDraftOnlyOnTime(false);
+    setDraftAttestedBy("");
+    setDraftDateFrom("");
+    setDraftDateTo("");
+    setApplied({
+      q: "",
+      store: "",
+      category: "",
+      status: "",
+      priority: "",
+      onlyOpen: false,
+      onlyOverdue: false,
+      onlyOnTime: false,
+      attestedBy: "",
+      dateFrom: "",
+      dateTo: ""
+    });
+  }
+
+  const hasActiveFilter = applied.q || applied.store || applied.category || applied.status || applied.priority || applied.onlyOpen || applied.onlyOverdue || applied.onlyOnTime || applied.dateFrom || applied.dateTo || applied.attestedBy;
 
   const scopedTickets = myStoreId ? data.tickets.filter(t => t.storeId === myStoreId) : data.tickets;
   const filtered = scopedTickets.filter(t =>
-    (!q || t.title.toLowerCase().includes(q.toLowerCase()) || osCode(t).toLowerCase().includes(q.toLowerCase())) &&
-    (!fStore || t.storeId === fStore) && (!fCat || t.categoryId === fCat) &&
-    (!fStatus || t.status === fStatus) && (!fPrio || t.priority === fPrio) &&
-    (!attestedByFilter || t.attestedBy === attestedByFilter) &&
-    (!onlyOpen || !isClosedStatus(data, t.status)) &&
-    (!onlyOverdue || (t.dueDate && daysDiff(t.dueDate) < 0 && !isClosedStatus(data, t.status))) &&
-    (!fDateFrom || t.createdAt.slice(0, 10) >= fDateFrom) &&
-    (!fDateTo || t.createdAt.slice(0, 10) <= fDateTo)
+    (!applied.q || t.title.toLowerCase().includes(applied.q.toLowerCase()) || osCode(t).toLowerCase().includes(applied.q.toLowerCase())) &&
+    (!applied.store || t.storeId === applied.store) &&
+    (!applied.category || t.categoryId === applied.category) &&
+    (!applied.status || t.status === applied.status) &&
+    (!applied.priority || t.priority === applied.priority) &&
+    (!applied.attestedBy || t.attestedBy === applied.attestedBy) &&
+    (!applied.onlyOpen || !isClosedStatus(data, t.status)) &&
+    (!applied.onlyOverdue || (t.dueDate && daysDiff(t.dueDate) < 0 && !isClosedStatus(data, t.status))) &&
+    (!applied.onlyOnTime || ((!t.dueDate || daysDiff(t.dueDate) >= 0) && !isClosedStatus(data, t.status))) &&
+    (!applied.dateFrom || t.createdAt.slice(0, 10) >= applied.dateFrom) &&
+    (!applied.dateTo || t.createdAt.slice(0, 10) <= applied.dateTo)
   ).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   function saveTicket(f) {
@@ -1258,27 +1361,86 @@ function TicketsView({ data, update, currentUser, initialFilters, initialOpenId 
       </div>
       <p className="text-sm mb-5" style={{ color: "var(--muted)" }}>{filtered.length} de {scopedTickets.length} demandas</p>
 
-      <div className="flex flex-wrap items-center gap-2 mb-5">
-        <div className="relative">
-          <Search size={14} className="absolute left-2.5 top-2.5" color="var(--faint)" />
-          <TextInput placeholder="Buscar por título ou OS..." value={q} onChange={e => setQ(e.target.value)} style={{ paddingLeft: 28, width: 220 }} />
+      {/* Barra de Filtros com Botão de Consulta */}
+      <div className="p-4 rounded-xl mb-5" style={{ backgroundColor: "var(--surface)", border: "1px solid var(--border)" }}>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="relative">
+            <Search size={14} className="absolute left-2.5 top-2.5" color="var(--faint)" />
+            <TextInput
+              placeholder="Buscar por título ou OS..."
+              value={draftQ}
+              onChange={e => setDraftQ(e.target.value)}
+              onKeyDown={handleKeyDown}
+              style={{ paddingLeft: 28, width: 220 }}
+            />
+          </div>
+          {isAdmin && (
+            <Select value={draftStore} onChange={e => setDraftStore(e.target.value)} style={{ width: 150 }}>
+              <option value="">Todas as lojas</option>
+              {data.stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </Select>
+          )}
+          <Select value={draftCat} onChange={e => setDraftCat(e.target.value)} style={{ width: 160 }}>
+            <option value="">Todas categorias</option>
+            {data.categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+          </Select>
+          <Select value={draftStatus} onChange={e => setDraftStatus(e.target.value)} style={{ width: 140 }}>
+            <option value="">Todos status</option>
+            {sortedStatuses(data).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </Select>
+          <Select value={draftPrio} onChange={e => setDraftPrio(e.target.value)} style={{ width: 130 }}>
+            <option value="">Toda prioridade</option>
+            {sortedPriorities(data).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+          </Select>
+          <div className="flex items-center gap-1">
+            <span className="text-xs font-medium" style={{ color: "var(--faint)" }}>De:</span>
+            <TextInput
+              type="date"
+              value={draftDateFrom}
+              onChange={e => setDraftDateFrom(e.target.value)}
+              onKeyDown={handleKeyDown}
+              style={{ width: 136 }}
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-xs font-medium" style={{ color: "var(--faint)" }}>Até:</span>
+            <TextInput
+              type="date"
+              value={draftDateTo}
+              onChange={e => setDraftDateTo(e.target.value)}
+              onKeyDown={handleKeyDown}
+              style={{ width: 136 }}
+            />
+          </div>
+          
+          <Button onClick={handleConsultar} size="sm">
+            <Search size={14} /> Consultar
+          </Button>
+
+          {hasActiveFilter && (
+            <Button variant="outline" size="sm" onClick={clearFilters}>
+              <X size={14} /> Limpar
+            </Button>
+          )}
         </div>
-        {isAdmin && <Select value={fStore} onChange={e => setFStore(e.target.value)} style={{ width: 150 }}><option value="">Todas as lojas</option>{data.stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</Select>}
-        <Select value={fCat} onChange={e => setFCat(e.target.value)} style={{ width: 170 }}><option value="">Todas categorias</option>{data.categories.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}</Select>
-        <Select value={fStatus} onChange={e => setFStatus(e.target.value)} style={{ width: 150 }}><option value="">Todos status</option>{sortedStatuses(data).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</Select>
-        <Select value={fPrio} onChange={e => setFPrio(e.target.value)} style={{ width: 140 }}><option value="">Toda prioridade</option>{sortedPriorities(data).map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</Select>
-        <div className="flex items-center gap-1">
-          <span className="text-xs" style={{ color: "var(--faint)" }}>De</span>
-          <TextInput type="date" value={fDateFrom} onChange={e => setFDateFrom(e.target.value)} style={{ width: 138 }} />
-        </div>
-        <div className="flex items-center gap-1">
-          <span className="text-xs" style={{ color: "var(--faint)" }}>Até</span>
-          <TextInput type="date" value={fDateTo} onChange={e => setFDateTo(e.target.value)} style={{ width: 138 }} />
-        </div>
-        {onlyOpen && <Pill label="somente abertas" color="var(--accent)" soft="var(--accent-soft)" />}
-        {onlyOverdue && <Pill label="somente atrasadas" color="var(--danger)" soft="var(--danger-soft)" />}
-        {attestedByFilter && <Pill label={attestedByFilter === "loja" ? "atestadas pela loja" : "atestadas pelo administrador"} color="var(--warn)" soft="var(--warn-soft)" />}
-        {hasActiveFilter && <button onClick={clearFilters} className="text-xs font-medium" style={{ color: "var(--accent)" }}>limpar filtros</button>}
+
+        {/* Tags de Filtros Ativos */}
+        {hasActiveFilter && (
+          <div className="flex items-center gap-2 mt-3 pt-3 flex-wrap text-xs" style={{ borderTop: "1px solid var(--border)" }}>
+            <span className="font-semibold text-gray-500">Filtros ativos:</span>
+            {applied.q && <Pill label={`Busca: "${applied.q}"`} color="var(--accent)" soft="var(--accent-soft)" />}
+            {applied.store && <Pill label={`Loja: ${data.stores.find(s => s.id === applied.store)?.name || applied.store}`} color="var(--accent)" soft="var(--accent-soft)" />}
+            {applied.category && <Pill label={`Categoria: ${data.categories.find(c => c.id === applied.category)?.name || applied.category}`} color="var(--accent)" soft="var(--accent-soft)" />}
+            {applied.status && <Pill label={`Status: ${findStatus(data, applied.status).label}`} color="var(--accent)" soft="var(--accent-soft)" />}
+            {applied.priority && <Pill label={`Prioridade: ${findPriority(data, applied.priority).label}`} color="var(--accent)" soft="var(--accent-soft)" />}
+            {applied.onlyOpen && <Pill label="somente abertas" color="var(--accent)" soft="var(--accent-soft)" />}
+            {applied.onlyOverdue && <Pill label="somente atrasadas (vencidas)" color="var(--danger)" soft="var(--danger-soft)" />}
+            {applied.onlyOnTime && <Pill label="somente no prazo" color="var(--ok)" soft="var(--ok-soft)" />}
+            {applied.attestedBy && <Pill label={applied.attestedBy === "loja" ? "atestadas pela loja" : "atestadas pelo administrador"} color="var(--warn)" soft="var(--warn-soft)" />}
+            {applied.dateFrom && <Pill label={`A partir de: ${fmtDate(applied.dateFrom)}`} color="var(--accent)" soft="var(--accent-soft)" />}
+            {applied.dateTo && <Pill label={`Até: ${fmtDate(applied.dateTo)}`} color="var(--accent)" soft="var(--accent-soft)" />}
+          </div>
+        )}
       </div>
 
       {filtered.length === 0 ? <EmptyState icon={<ClipboardList size={32} />} title="Nenhuma demanda encontrada" sub="Ajuste os filtros ou crie uma nova demanda." /> : (

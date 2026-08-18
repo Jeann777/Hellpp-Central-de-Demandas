@@ -125,15 +125,18 @@ export async function loadSupabaseData() {
 
 // Salva dados no Supabase quando alterados
 export async function syncKeyToSupabase(key, items) {
-  if (!isSupabaseConfigured || !supabase) return;
+  if (!isSupabaseConfigured || !supabase) return { success: false, error: 'Supabase não configurado' };
   const tableName = TABLE_MAP[key];
-  if (!tableName || !Array.isArray(items)) return;
+  if (!tableName || !Array.isArray(items)) return { success: false, error: 'Tabela inválida ou dados não são array' };
 
   try {
     const formatted = items.map(item => toSnakeCase(item, key));
     
     // Obter IDs existentes para deletar itens removidos
-    const { data: existing } = await supabase.from(tableName).select('id');
+    const { data: existing, error: fetchErr } = await supabase.from(tableName).select('id');
+    if (fetchErr) {
+      console.warn(`Erro ao consultar IDs existentes de ${tableName}:`, fetchErr);
+    }
     const existingIds = (existing || []).map(x => x.id);
     const newIds = new Set(formatted.map(x => x.id));
     const toDelete = existingIds.filter(id => !newIds.has(id));
@@ -143,11 +146,25 @@ export async function syncKeyToSupabase(key, items) {
     }
 
     if (formatted.length > 0) {
-      const { error } = await supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
-      if (error) console.error(`Erro ao salvar ${tableName} no Supabase:`, error);
+      let { error } = await supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
+      
+      // Se der erro por falta da coluna 'password' na tabela app_users, faz fallback salvando os outros campos
+      if (error && key === 'users' && (error.code === 'PGRST204' || error.message?.includes('password'))) {
+        console.warn('⚠️ A coluna "password" ainda não foi criada no Supabase. Salvando usuários sem a senha no banco (adicione a coluna "password TEXT" no Supabase).');
+        const withoutPassword = formatted.map(({ password, ...u }) => u);
+        const retry = await supabase.from(tableName).upsert(withoutPassword, { onConflict: 'id' });
+        error = retry.error;
+      }
+
+      if (error) {
+        console.error(`❌ Erro ao salvar ${tableName} no Supabase:`, error);
+        return { success: false, error };
+      }
     }
+    return { success: true };
   } catch (err) {
-    console.error(`Erro de sincronização em ${tableName}:`, err);
+    console.error(`❌ Erro de sincronização em ${tableName}:`, err);
+    return { success: false, error: err };
   }
 }
 
