@@ -124,7 +124,6 @@ export async function loadSupabaseData() {
 }
 
 // Salva dados no Supabase quando alterados
-// ATENÇÃO: para 'users', NUNCA deleta — apenas upsert — pois uma lista parcial apagaria usuários reais
 export async function syncKeyToSupabase(key, items) {
   if (!isSupabaseConfigured || !supabase) return;
   const tableName = TABLE_MAP[key];
@@ -132,17 +131,8 @@ export async function syncKeyToSupabase(key, items) {
 
   try {
     const formatted = items.map(item => toSnakeCase(item, key));
-
-    // Usuários: NUNCA deletar, apenas inserir/atualizar
-    if (key === 'users') {
-      if (formatted.length > 0) {
-        const { error } = await supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
-        if (error) console.error(`Erro ao salvar ${tableName} no Supabase:`, error);
-      }
-      return;
-    }
-
-    // Para outras tabelas: deletar itens removidos e upsert
+    
+    // Obter IDs existentes para deletar itens removidos
     const { data: existing } = await supabase.from(tableName).select('id');
     const existingIds = (existing || []).map(x => x.id);
     const newIds = new Set(formatted.map(x => x.id));
