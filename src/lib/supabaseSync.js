@@ -11,7 +11,6 @@ export function toSnakeCase(item, type) {
       id: item.id,
       name: item.name || '',
       email: item.email ? item.email.trim().toLowerCase() : '',
-      password: item.password || (item.role === 'admin' ? 'admin' : '123'),
       role: item.role || 'loja',
       store_id: (item.storeId || item.store_id || '').trim() || null,
       created_at: item.created_at || item.createdAt || new Date().toISOString()
@@ -206,15 +205,7 @@ export async function syncKeyToSupabase(key, items) {
     const formatted = items.map(item => toSnakeCase(item, key));
 
     if (formatted.length > 0) {
-      let { data, error } = await supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
-      
-      // Se der erro por falta da coluna 'password' na tabela app_users, faz fallback salvando os outros campos
-      if (error && key === 'users' && (error.code === 'PGRST204' || error.message?.includes('password'))) {
-        console.warn('⚠️ A coluna "password" ainda não foi criada no Supabase. Salvando usuários sem a senha no banco.');
-        const withoutPassword = formatted.map(({ password, ...u }) => u);
-        const retry = await supabase.from(tableName).upsert(withoutPassword, { onConflict: 'id' });
-        error = retry.error;
-      }
+      const { data, error } = await supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
 
       if (error) {
         console.error(`❌ Erro ao salvar ${tableName} no Supabase:`, error);

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS public.app_users (
     auth_id UUID,
     name TEXT NOT NULL,
     email TEXT,
+    password TEXT DEFAULT '123456',
     role TEXT NOT NULL DEFAULT 'loja', -- 'admin' ou 'loja'
     store_id TEXT REFERENCES public.stores(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT now()
@@ -142,3 +143,9 @@ INSERT INTO public.priorities (id, label, color, soft, weight) VALUES
 ('media', 'Média', '#B08900', '#FBF3D9', 2),
 ('baixa', 'Baixa', '#6B7280', '#EEF0F3', 1)
 ON CONFLICT (id) DO NOTHING;
+
+-- Usuário Administrador Inicial (para primeiro acesso e gestão)
+INSERT INTO public.app_users (id, name, email, password, role, store_id) VALUES
+('usr-admin-master', 'Administrador', 'admin@empresa.com', 'admin', 'admin', NULL)
+ON CONFLICT (id) DO NOTHING;
+
