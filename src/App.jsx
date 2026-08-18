@@ -394,7 +394,15 @@ function useStore() {
       setIsSyncing(true);
       const fresh = await loadSupabaseData();
       if (fresh) {
-        setData(fresh);
+        setData(prev => ({
+          stores: fresh.stores?.length ? fresh.stores : prev.stores,
+          categories: fresh.categories?.length ? fresh.categories : prev.categories,
+          users: fresh.users?.length ? fresh.users : prev.users,
+          tickets: fresh.tickets || prev.tickets,
+          alerts: fresh.alerts || prev.alerts,
+          statuses: fresh.statuses?.length ? fresh.statuses : prev.statuses,
+          priorities: fresh.priorities?.length ? fresh.priorities : prev.priorities,
+        }));
       }
       setTimeout(() => setIsSyncing(false), 600);
     });
@@ -614,37 +622,43 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
 }
 
 function useCurrentUser(ready, users) {
-  const [currentUserId, setCurrentUserId] = useState(() => {
+  const [session, setSession] = useState(() => {
     try {
-      return localStorage.getItem(CURRENT_USER_KEY) || "";
-    } catch { return ""; }
+      const stored = localStorage.getItem(CURRENT_USER_KEY);
+      if (!stored) return null;
+      if (stored.startsWith('{')) {
+        return JSON.parse(stored);
+      }
+      return { id: stored };
+    } catch { return null; }
   });
 
-  useEffect(() => {
-    if (!ready || !users.length) return;
-    if (currentUserId && !users.some(u => u.id === currentUserId)) {
-      setCurrentUserId("");
-      try { localStorage.removeItem(CURRENT_USER_KEY); } catch {}
-    }
-  }, [ready, users, currentUserId]);
-
-  function loginUser(id) {
-    setCurrentUserId(id);
+  function loginUser(user) {
+    const userObj = typeof user === 'object' ? user : { id: user };
+    setSession(userObj);
     try {
-      localStorage.setItem(CURRENT_USER_KEY, id);
-      window.storage?.set(CURRENT_USER_KEY, JSON.stringify(id), false)?.catch(() => {});
+      localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(userObj));
+      window.storage?.set(CURRENT_USER_KEY, JSON.stringify(userObj), false)?.catch(() => {});
     } catch {}
   }
 
   function logoutUser() {
-    setCurrentUserId("");
+    setSession(null);
     try {
       localStorage.removeItem(CURRENT_USER_KEY);
       window.storage?.delete?.(CURRENT_USER_KEY)?.catch(() => {});
     } catch {}
   }
 
-  return { currentUserId, loginUser, logoutUser };
+  // Mantém o usuário atual ativo, mesclando atualizações do banco sem nunca derrubar a sessão
+  const currentUser = useMemo(() => {
+    if (!session) return null;
+    const found = users?.find(u => u.id === session.id || (u.email && session.email && u.email.toLowerCase() === session.email.toLowerCase()));
+    if (found) return found;
+    return session;
+  }, [users, session]);
+
+  return { currentUser, loginUser, logoutUser };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1886,8 +1900,7 @@ function AdminView({ data, update }) {
 
 export default function App() {
   const { data, ready, update } = useStore();
-  const { currentUserId, loginUser, logoutUser } = useCurrentUser(ready, data.users);
-  const currentUser = data.users.find(u => u.id === currentUserId) || null;
+  const { currentUser, loginUser, logoutUser } = useCurrentUser(ready, data.users);
   const [view, setView] = useState("dashboard");
   const [ticketsNav, setTicketsNav] = useState({ filters: null, openId: null });
   const [loginNotice, setLoginNotice] = useState(null);
@@ -1956,7 +1969,7 @@ export default function App() {
         <LoginScreen
           users={data.users}
           stores={data.stores}
-          onLogin={user => loginUser(user.id)}
+          onLogin={user => loginUser(user)}
           isCloud={isSupabaseConfigured}
         />
       </>
