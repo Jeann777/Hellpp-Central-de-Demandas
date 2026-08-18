@@ -503,7 +503,7 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
 
   function handleDemoLogin(u) {
     setIdentifier(u.email || u.name);
-    setPassword(u.password || (u.role === "admin" ? "admin" : "123"));
+    setPassword("");
     setError("");
   }
 
@@ -513,14 +513,8 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
         
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold mb-4" style={{ backgroundColor: isCloud ? "rgba(14,122,74,0.2)" : "#222A38", color: isCloud ? "#34D399" : "#9CA3AF" }}>
-            <span className={`w-2 h-2 rounded-full ${isCloud ? 'bg-emerald-400 animate-pulse' : 'bg-gray-400'}`} />
-            {isCloud ? "Nuvem Conectada (Supabase)" : "Armazenamento Local"}
-          </div>
-
-          <div className="flex items-center justify-center gap-2 mb-2">
-            <span className="text-3xl font-extrabold" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>OS.</span>
-            <span className="text-3xl font-extrabold text-white">Painel</span>
+          <div className="flex items-center justify-center gap-2 mb-1">
+            <span className="text-4xl font-extrabold tracking-tight" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>Hellpp</span>
           </div>
           <h2 className="text-lg font-bold text-white mb-1">Central de Demandas</h2>
           <p className="text-xs" style={{ color: "#8A93A6" }}>Informe seu e-mail e senha para acessar o sistema</p>
@@ -546,7 +540,7 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
                 type="text"
                 value={identifier}
                 onChange={e => setIdentifier(e.target.value)}
-                placeholder="ex: admin@empresa.com ou loja1@empresa.com"
+                placeholder="ex: seu-email@empresa.com"
                 className="w-full pl-9 pr-3 py-2.5 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
                 style={{ backgroundColor: "#101622", border: "1px solid #2B3445" }}
                 autoFocus
@@ -589,11 +583,11 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
           </button>
         </form>
 
-        {/* Demo / Quick helper */}
+        {/* Quick access helper */}
         {users && users.length > 0 && (
           <div className="mt-8 pt-6" style={{ borderTop: "1px solid #2B3445" }}>
             <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide text-center mb-3">
-              Acessos Rápidos (Demonstração / Teste):
+              Acessos Rápidos:
             </p>
             <div className="flex flex-col gap-1.5">
               {users.slice(0, 4).map(u => (
@@ -603,6 +597,7 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
                   onClick={() => handleDemoLogin(u)}
                   className="flex items-center justify-between px-3 py-2 rounded-lg text-xs transition text-left hover:bg-emerald-950/30"
                   style={{ backgroundColor: "#101622", border: "1px solid #2B3445", color: "#CBD5E1" }}
+                  title="Clique para selecionar este usuário"
                 >
                   <div className="flex items-center gap-2 truncate">
                     <span className="font-semibold text-white">{u.name}</span>
@@ -681,8 +676,7 @@ function Sidebar({ view, setView, counts, currentUser, stores, onLogout }) {
       <div>
         <div className="px-5 pt-6 pb-5">
           <div className="flex items-baseline gap-1">
-            <span className="text-lg font-bold" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>OS.</span>
-            <span className="text-lg font-bold text-white">Painel</span>
+            <span className="text-xl font-extrabold tracking-tight" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>Hellpp</span>
           </div>
           <p className="text-xs mt-0.5" style={{ color: "#8A93A6" }}>
             {isAdmin ? "Central Administrativa Geral" : (userStore?.name || "Painel da Loja")}
