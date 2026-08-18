@@ -3,7 +3,7 @@ import {
   LayoutGrid, ClipboardList, Bell, Building2, Tag, Users, Plus, Search,
   X, Paperclip, Trash2, Pencil, Check, AlertTriangle,
   CalendarClock, MessageSquare, Loader2, Shield, Flag, SlidersHorizontal, BarChart3, Download, Info,
-  Cloud, RefreshCw
+  Cloud, RefreshCw, LogOut, Lock, Mail, Eye, EyeOff, KeyRound, UserCheck
 } from "lucide-react";
 import {
   isSupabaseConfigured,
@@ -94,12 +94,13 @@ function lighten(hex, amount = 0.85) {
 }
 
 function uid() { return Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4); }
-// Compatibilidade: converte usuários salvos em versões antigas (papéis "gestor"/"operador", múltiplas lojas) para o novo modelo.
+// Compatibilidade: converte usuários salvos em versões antigas para o novo modelo com senha.
 function normalizeUser(u) {
   let role = u.role === "admin" ? "admin" : "loja";
   let storeId = u.storeId || (Array.isArray(u.storeIds) && u.storeIds.length ? u.storeIds[0] : "") || "";
+  let password = u.password || (role === "admin" ? "admin" : "123");
   const { storeIds, ...rest } = u;
-  return { ...rest, role, storeId };
+  return { ...rest, role, storeId, password };
 }
 function csvEscape(val) { return `"${(val ?? "").toString().replace(/"/g, '""')}"`; }
 function downloadCSV(filename, headers, rows) {
@@ -165,10 +166,10 @@ function seedData() {
     { id: uid(), name: "Segurança / Incêndio", icon: "🧯", color: "#D0342C", slaHours: 12 },
   ];
   const users = [
-    { id: uid(), name: "Renata Souza", email: "renata.souza@empresa.com", role: "admin", storeId: "" },
-    { id: uid(), name: "Carlos Mendes", email: "carlos.mendes@empresa.com", role: "loja", storeId: stores[0].id },
-    { id: uid(), name: "Fabiana Lima", email: "fabiana.lima@empresa.com", role: "loja", storeId: stores[1].id },
-    { id: uid(), name: "João Prado", email: "joao.prado@empresa.com", role: "loja", storeId: stores[2].id },
+    { id: uid(), name: "Renata Souza (Admin)", email: "admin@empresa.com", password: "admin", role: "admin", storeId: "" },
+    { id: uid(), name: "Carlos Mendes", email: "loja1@empresa.com", password: "123", role: "loja", storeId: stores[0].id },
+    { id: uid(), name: "Fabiana Lima", email: "loja2@empresa.com", password: "123", role: "loja", storeId: stores[1].id },
+    { id: uid(), name: "João Prado", email: "loja3@empresa.com", password: "123", role: "loja", storeId: stores[2].id },
   ];
   const year = new Date().getFullYear();
   const mk = (over) => ({ attachments: [], comments: [], history: [], budget: "", serviceNotes: "", updatedAt: over.createdAt, attestedBy: "", attestedAt: "", ...over });
@@ -422,40 +423,217 @@ function useStore() {
   return { data, ready, update, saveError, isSyncing, isCloud: isSupabaseConfigured };
 }
 
-function useCurrentUser(ready, users) {
-  const [currentUserId, setCurrentUserId] = useState("");
-  useEffect(() => {
-    if (!ready) return;
-    let cancelled = false;
-    (async () => {
-      let saved = null;
-      try { const r = await window.storage.get(CURRENT_USER_KEY, false); saved = r ? JSON.parse(r.value) : null; } catch {}
-      const valid = saved && users.some(u => u.id === saved);
-      if (cancelled) return;
-      if (valid) { setCurrentUserId(saved); return; }
-      const fallback = users.find(u => u.role === "admin") || users[0];
-      if (fallback) {
-        setCurrentUserId(fallback.id);
-        window.storage.set(CURRENT_USER_KEY, JSON.stringify(fallback.id), false).catch(() => {});
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready]);
+/* ------------------------------------------------------------------ */
+/* Tela de Login                                                       */
+/* ------------------------------------------------------------------ */
 
-  function changeUser(id) {
-    setCurrentUserId(id);
-    window.storage.set(CURRENT_USER_KEY, JSON.stringify(id), false).catch(() => {});
+function LoginScreen({ users, stores, onLogin, isCloud }) {
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    setError("");
+    const cleanId = identifier.trim().toLowerCase();
+    const cleanPass = password.trim();
+
+    if (!cleanId) {
+      setError("Por favor, informe seu e-mail ou nome de usuário.");
+      return;
+    }
+    if (!cleanPass) {
+      setError("Por favor, digite sua senha de acesso.");
+      return;
+    }
+
+    setLoading(true);
+    setTimeout(() => {
+      // Procura por email (case-insensitive) ou nome
+      const user = users.find(u =>
+        (u.email && u.email.trim().toLowerCase() === cleanId) ||
+        (u.name && u.name.trim().toLowerCase() === cleanId)
+      );
+
+      if (!user) {
+        setError("Usuário não encontrado. Verifique o e-mail digitado.");
+        setLoading(false);
+        return;
+      }
+
+      const validPassword = user.password || (user.role === "admin" ? "admin" : "123");
+      if (cleanPass === validPassword) {
+        onLogin(user);
+      } else {
+        setError("Senha incorreta. Tente novamente.");
+        setLoading(false);
+      }
+    }, 150);
   }
-  return { currentUserId, changeUser };
+
+  function handleDemoLogin(u) {
+    setIdentifier(u.email || u.name);
+    setPassword(u.password || (u.role === "admin" ? "admin" : "123"));
+    setError("");
+  }
+
+  return (
+    <div className="min-h-screen w-full flex items-center justify-center p-4" style={{ backgroundColor: "#0F141E", fontFamily: "var(--font-ui)" }}>
+      <div className="w-full max-w-md rounded-2xl p-8 shadow-2xl" style={{ backgroundColor: "#181F2C", border: "1px solid #2B3445" }}>
+        
+        {/* Header */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold mb-4" style={{ backgroundColor: isCloud ? "rgba(14,122,74,0.2)" : "#222A38", color: isCloud ? "#34D399" : "#9CA3AF" }}>
+            <span className={`w-2 h-2 rounded-full ${isCloud ? 'bg-emerald-400 animate-pulse' : 'bg-gray-400'}`} />
+            {isCloud ? "Nuvem Conectada (Supabase)" : "Armazenamento Local"}
+          </div>
+
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <span className="text-3xl font-extrabold" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>OS.</span>
+            <span className="text-3xl font-extrabold text-white">Painel</span>
+          </div>
+          <h2 className="text-lg font-bold text-white mb-1">Central de Demandas</h2>
+          <p className="text-xs" style={{ color: "#8A93A6" }}>Informe seu e-mail e senha para acessar o sistema</p>
+        </div>
+
+        {/* Error alert */}
+        {error && (
+          <div className="mb-5 p-3 rounded-lg flex items-center gap-2.5 text-xs font-medium text-red-300" style={{ backgroundColor: "rgba(208,52,44,0.15)", border: "1px solid rgba(208,52,44,0.4)" }}>
+            <AlertTriangle size={16} className="shrink-0 text-red-400" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-300 mb-1.5">E-mail ou Usuário</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                <Mail size={16} />
+              </span>
+              <input
+                type="text"
+                value={identifier}
+                onChange={e => setIdentifier(e.target.value)}
+                placeholder="ex: admin@empresa.com ou loja1@empresa.com"
+                className="w-full pl-9 pr-3 py-2.5 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
+                style={{ backgroundColor: "#101622", border: "1px solid #2B3445" }}
+                autoFocus
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-300 mb-1.5">Senha de Acesso</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                <Lock size={16} />
+              </span>
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder="Digite sua senha"
+                className="w-full pl-9 pr-10 py-2.5 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
+                style={{ backgroundColor: "#101622", border: "1px solid #2B3445" }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white transition"
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full mt-2 py-3 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2 shadow-lg"
+            style={{ backgroundColor: "var(--accent)", opacity: loading ? 0.7 : 1 }}
+          >
+            {loading ? <Loader2 size={18} className="animate-spin" /> : <KeyRound size={16} />}
+            {loading ? "Entrando..." : "Entrar no Sistema"}
+          </button>
+        </form>
+
+        {/* Demo / Quick helper */}
+        {users && users.length > 0 && (
+          <div className="mt-8 pt-6" style={{ borderTop: "1px solid #2B3445" }}>
+            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide text-center mb-3">
+              Acessos Rápidos (Demonstração / Teste):
+            </p>
+            <div className="flex flex-col gap-1.5">
+              {users.slice(0, 4).map(u => (
+                <button
+                  key={u.id}
+                  type="button"
+                  onClick={() => handleDemoLogin(u)}
+                  className="flex items-center justify-between px-3 py-2 rounded-lg text-xs transition text-left hover:bg-emerald-950/30"
+                  style={{ backgroundColor: "#101622", border: "1px solid #2B3445", color: "#CBD5E1" }}
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <span className="font-semibold text-white">{u.name}</span>
+                    <span className="text-[10px] text-gray-400">({u.email})</span>
+                  </div>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ backgroundColor: u.role === 'admin' ? 'rgba(14,110,93,0.3)' : 'rgba(34,85,201,0.2)', color: u.role === 'admin' ? '#34D399' : '#93C5FD' }}>
+                    {u.role === 'admin' ? 'Admin' : 'Loja'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function useCurrentUser(ready, users) {
+  const [currentUserId, setCurrentUserId] = useState(() => {
+    try {
+      return localStorage.getItem(CURRENT_USER_KEY) || "";
+    } catch { return ""; }
+  });
+
+  useEffect(() => {
+    if (!ready || !users.length) return;
+    if (currentUserId && !users.some(u => u.id === currentUserId)) {
+      setCurrentUserId("");
+      try { localStorage.removeItem(CURRENT_USER_KEY); } catch {}
+    }
+  }, [ready, users, currentUserId]);
+
+  function loginUser(id) {
+    setCurrentUserId(id);
+    try {
+      localStorage.setItem(CURRENT_USER_KEY, id);
+      window.storage?.set(CURRENT_USER_KEY, JSON.stringify(id), false)?.catch(() => {});
+    } catch {}
+  }
+
+  function logoutUser() {
+    setCurrentUserId("");
+    try {
+      localStorage.removeItem(CURRENT_USER_KEY);
+      window.storage?.delete?.(CURRENT_USER_KEY)?.catch(() => {});
+    } catch {}
+  }
+
+  return { currentUserId, loginUser, logoutUser };
 }
 
 /* ------------------------------------------------------------------ */
 /* Sidebar                                                              */
 /* ------------------------------------------------------------------ */
 
-function Sidebar({ view, setView, counts, currentUser, users, onChangeUser }) {
+function Sidebar({ view, setView, counts, currentUser, stores, onLogout }) {
   const isAdmin = currentUser?.role === "admin";
+  const userStore = stores?.find(s => s.id === currentUser?.storeId);
   const items = [
     { id: "dashboard", label: "Painel", icon: LayoutGrid },
     { id: "tickets", label: "Demandas", icon: ClipboardList, badge: counts.open },
@@ -465,14 +643,16 @@ function Sidebar({ view, setView, counts, currentUser, users, onChangeUser }) {
   if (isAdmin) items.push({ id: "admin", label: "Administração", icon: Shield });
 
   return (
-    <div className="w-56 shrink-0 h-screen flex flex-col justify-between" style={{ backgroundColor: "var(--ink)" }}>
+    <div className="w-60 shrink-0 h-screen flex flex-col justify-between" style={{ backgroundColor: "var(--ink)" }}>
       <div>
         <div className="px-5 pt-6 pb-5">
           <div className="flex items-baseline gap-1">
             <span className="text-lg font-bold" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>OS.</span>
             <span className="text-lg font-bold text-white">Painel</span>
           </div>
-          <p className="text-xs mt-0.5" style={{ color: "#8A93A6" }}>Gestão de demandas das lojas</p>
+          <p className="text-xs mt-0.5" style={{ color: "#8A93A6" }}>
+            {isAdmin ? "Central Administrativa Geral" : (userStore?.name || "Painel da Loja")}
+          </p>
         </div>
         <nav className="px-3 flex flex-col gap-0.5">
           {items.map(it => {
@@ -489,22 +669,37 @@ function Sidebar({ view, setView, counts, currentUser, users, onChangeUser }) {
           })}
         </nav>
       </div>
+
       <div className="px-4 py-4" style={{ borderTop: "1px solid #262E3D" }}>
         <div className="flex items-center justify-between mb-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "#6B7383" }}>Atuando como</p>
+          <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: "#6B7383" }}>Conectado como</span>
           <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: isSupabaseConfigured ? "rgba(14,122,74,0.2)" : "#222A38", color: isSupabaseConfigured ? "#34D399" : "#9CA3AF" }}>
             <span className={`w-1.5 h-1.5 rounded-full ${isSupabaseConfigured ? 'bg-emerald-400 animate-pulse' : 'bg-gray-400'}`} />
             {isSupabaseConfigured ? "Nuvem Ativa" : "Local"}
           </span>
         </div>
-        <select value={currentUser?.id || ""} onChange={e => onChangeUser(e.target.value)}
-          className="w-full text-xs rounded-md px-2 py-1.5 mb-1"
-          style={{ backgroundColor: "#1F2532", color: "#fff", border: "1px solid #2B3242" }}>
-          {users.map(u => <option key={u.id} value={u.id}>{u.name} — {ROLES.find(r => r.id === u.role)?.label}</option>)}
-        </select>
-        <p className="text-[10px]" style={{ color: "#6B7383" }}>
-          {isSupabaseConfigured ? "Sincronizado em tempo real no Supabase." : "Dados salvos localmente neste navegador."}
-        </p>
+
+        <div className="rounded-lg p-2.5 mb-2.5 flex items-center gap-2.5" style={{ backgroundColor: "#1F2532", border: "1px solid #2B3242" }}>
+          <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: "var(--accent)", color: "#fff" }}>
+            {currentUser?.name?.split(" ").map(n => n[0]).slice(0, 2).join("") || "U"}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-white truncate">{currentUser?.name}</p>
+            <p className="text-[11px] truncate" style={{ color: "#8A93A6" }}>
+              {currentUser?.role === "admin" ? "Administrador" : (userStore?.name || "Loja")}
+            </p>
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={onLogout}
+          className="w-full flex items-center justify-center gap-1.5 text-xs rounded-md py-1.5 font-medium transition cursor-pointer"
+          style={{ backgroundColor: "rgba(208,52,44,0.12)", color: "#F87171", border: "1px solid rgba(208,52,44,0.3)" }}
+          title="Sair da conta e voltar ao login"
+        >
+          <LogOut size={13} /> Sair do sistema
+        </button>
       </div>
     </div>
   );
@@ -1344,7 +1539,7 @@ function UsersView({ data, update }) {
   return (
     <>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm" style={{ color: "var(--muted)" }}>{data.users.length} usuários com acesso ao painel.</p>
+        <p className="text-sm" style={{ color: "var(--muted)" }}>{data.users.length} usuários cadastrados para acessar o sistema.</p>
         <Button size="sm" onClick={() => { setEditing(null); setShowForm(true); }}><Plus size={14} /> Novo usuário</Button>
       </div>
       <div className="flex flex-col gap-2">
@@ -1352,13 +1547,15 @@ function UsersView({ data, update }) {
           <div key={u.id} className="rounded-xl p-3.5 flex items-center gap-3" style={{ backgroundColor: "var(--surface)", border: "1px solid var(--border)" }}>
             <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent-ink)" }}>{u.name.split(" ").map(n => n[0]).slice(0, 2).join("")}</div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold truncate" style={{ color: "var(--ink)" }}>{u.name}</p>
-              <p className="text-xs truncate" style={{ color: "var(--faint)" }}>
-                {u.email} · {u.role === "admin" ? "Acesso a todas as lojas" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold truncate" style={{ color: "var(--ink)" }}>{u.name}</p>
+                <Pill label={ROLES.find(r => r.id === u.role)?.label} color="var(--accent)" soft="var(--accent-soft)" />
+              </div>
+              <p className="text-xs truncate mt-0.5" style={{ color: "var(--faint)" }}>
+                <strong>Login:</strong> {u.email} · <strong>Senha:</strong> <span className="font-mono text-gray-700 bg-gray-100 px-1 py-0.5 rounded">{u.password || "123"}</span> · {u.role === "admin" ? "Acesso total" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
               </p>
             </div>
-            <Pill label={ROLES.find(r => r.id === u.role)?.label} color="var(--accent)" soft="var(--accent-soft)" />
-            <div className="flex gap-1"><IconBtn onClick={() => { setEditing(u); setShowForm(true); }}><Pencil size={15} /></IconBtn><IconBtn onClick={() => remove(u.id)}><Trash2 size={15} /></IconBtn></div>
+            <div className="flex gap-1"><IconBtn onClick={() => { setEditing(u); setShowForm(true); }} title="Editar dados e senha"><Pencil size={15} /></IconBtn><IconBtn onClick={() => remove(u.id)} title="Excluir usuário"><Trash2 size={15} /></IconBtn></div>
           </div>
         ))}
       </div>
@@ -1366,15 +1563,51 @@ function UsersView({ data, update }) {
     </>
   );
 }
+
 function UserFormModal({ initial, stores, onCancel, onSave }) {
-  const [f, setF] = useState(initial ? { name: initial.name, email: initial.email, role: initial.role, storeId: initial.storeId || "" } : { name: "", email: "", role: "loja", storeId: stores[0]?.id || "" });
+  const [f, setF] = useState(initial ? {
+    name: initial.name,
+    email: initial.email,
+    password: initial.password || "123",
+    role: initial.role,
+    storeId: initial.storeId || ""
+  } : {
+    name: "",
+    email: "",
+    password: "123",
+    role: "loja",
+    storeId: stores[0]?.id || ""
+  });
+  const [showPass, setShowPass] = useState(false);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+
   return (
     <Modal title={initial ? "Editar usuário" : "Novo usuário"} onClose={onCancel}>
       <div className="flex flex-col gap-3">
-        <Field label="Nome"><TextInput value={f.name} onChange={e => set("name", e.target.value)} /></Field>
-        <Field label="E-mail"><TextInput type="email" value={f.email} onChange={e => set("email", e.target.value)} /></Field>
-        <Field label="Perfil de acesso"><Select value={f.role} onChange={e => set("role", e.target.value)}>{ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}</Select></Field>
+        <Field label="Nome completo"><TextInput value={f.name} onChange={e => set("name", e.target.value)} placeholder="Ex: Carlos Mendes" /></Field>
+        <Field label="E-mail de acesso (Login)"><TextInput type="email" value={f.email} onChange={e => set("email", e.target.value)} placeholder="ex: loja1@empresa.com" /></Field>
+        <Field label="Senha de acesso" hint="Senha usada por este usuário para entrar na Central de Demandas.">
+          <div className="relative">
+            <TextInput
+              type={showPass ? "text" : "password"}
+              value={f.password}
+              onChange={e => set("password", e.target.value)}
+              placeholder="Digite a senha"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPass(!showPass)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
+              {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+        </Field>
+        <Field label="Perfil de acesso">
+          <Select value={f.role} onChange={e => set("role", e.target.value)}>
+            {ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </Select>
+        </Field>
         {f.role === "loja" && (
           <Field label="Loja vinculada" hint="O usuário só terá acesso às demandas, alertas e dados desta loja.">
             <Select value={f.storeId} onChange={e => set("storeId", e.target.value)}>
@@ -1383,7 +1616,10 @@ function UserFormModal({ initial, stores, onCancel, onSave }) {
             </Select>
           </Field>
         )}
-        <div className="flex justify-end gap-2 mt-2"><Button variant="outline" onClick={onCancel}>Cancelar</Button><Button onClick={() => onSave(f)} disabled={!f.name.trim() || (f.role === "loja" && !f.storeId)}>Salvar</Button></div>
+        <div className="flex justify-end gap-2 mt-2">
+          <Button variant="outline" onClick={onCancel}>Cancelar</Button>
+          <Button onClick={() => onSave(f)} disabled={!f.name.trim() || !f.email.trim() || !f.password?.trim() || (f.role === "loja" && !f.storeId)}>Salvar</Button>
+        </div>
       </div>
     </Modal>
   );
@@ -1630,7 +1866,7 @@ function AdminView({ data, update }) {
 
 export default function App() {
   const { data, ready, update } = useStore();
-  const { currentUserId, changeUser } = useCurrentUser(ready, data.users);
+  const { currentUserId, loginUser, logoutUser } = useCurrentUser(ready, data.users);
   const currentUser = data.users.find(u => u.id === currentUserId) || null;
   const [view, setView] = useState("dashboard");
   const [ticketsNav, setTicketsNav] = useState({ filters: null, openId: null });
@@ -1652,8 +1888,7 @@ export default function App() {
     if ((view === "admin" || view === "reports") && ready && currentUser && currentUser.role !== "admin") setView("dashboard");
   }, [view, ready, currentUser]);
 
-  // Ao "logar" (identidade resolvida ou trocada), avisa quantas demandas do seu escopo precisam de atenção
-  // (abertas e com alguma interação/mudança) desde o último acesso.
+  // Ao logar, avisa quantas demandas precisam de atenção
   useEffect(() => {
     if (!ready || !currentUser) return;
     if (loginCheckedRef.current === currentUser.id) return;
@@ -1693,10 +1928,32 @@ export default function App() {
     );
   }
 
+  // Se não estiver logado, exibe a tela de login
+  if (!currentUser) {
+    return (
+      <>
+        <style>{TOKENS}</style>
+        <LoginScreen
+          users={data.users}
+          stores={data.stores}
+          onLogin={user => loginUser(user.id)}
+          isCloud={isSupabaseConfigured}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="flex w-full" style={{ backgroundColor: "var(--bg)", fontFamily: "var(--font-ui)", minHeight: "100vh" }}>
       <style>{TOKENS}</style>
-      <Sidebar view={view} setView={handleSidebarNav} counts={counts} currentUser={currentUser} users={data.users} onChangeUser={changeUser} />
+      <Sidebar
+        view={view}
+        setView={handleSidebarNav}
+        counts={counts}
+        currentUser={currentUser}
+        stores={data.stores}
+        onLogout={logoutUser}
+      />
       <div className="flex-1 overflow-y-auto" style={{ maxHeight: "100vh" }}>
         {view === "dashboard" && <Dashboard data={data} currentUser={currentUser} sinceLogin={sinceLogin} onGoTickets={goToTickets} onGoAlerts={goToAlerts} />}
         {view === "tickets" && <TicketsView data={data} update={update} currentUser={currentUser} initialFilters={ticketsNav.filters} initialOpenId={ticketsNav.openId} />}
