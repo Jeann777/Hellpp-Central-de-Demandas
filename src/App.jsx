@@ -1718,8 +1718,15 @@ function UsersView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   function save(f) {
-    if (editing) update("users", data.users.map(u => u.id === editing.id ? { ...u, ...f } : u));
-    else update("users", [...data.users, { id: uid(), ...f }]);
+    const payload = {
+      name: f.name.trim(),
+      email: f.email.trim().toLowerCase(),
+      password: f.password?.trim() || (f.role === "admin" ? "admin" : "123"),
+      role: f.role,
+      storeId: f.role === "admin" ? "" : (f.storeId || "")
+    };
+    if (editing) update("users", data.users.map(u => u.id === editing.id ? { ...u, ...payload } : u));
+    else update("users", [...data.users, { id: uid(), ...payload }]);
     setShowForm(false); setEditing(null);
   }
   function remove(id) {

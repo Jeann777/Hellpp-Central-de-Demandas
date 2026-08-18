@@ -2,37 +2,109 @@ import { supabase, isSupabaseConfigured } from './supabase.js';
 
 export { isSupabaseConfigured };
 
-// Mapeamentos CamelCase <-> SnakeCase
+// Mapeamentos CamelCase <-> SnakeCase com Sanitização Estrita de Tipos e Foreign Keys
 export function toSnakeCase(item, type) {
   if (!item) return item;
-  const res = { ...item };
+
+  if (type === 'users') {
+    return {
+      id: item.id,
+      name: item.name || '',
+      email: item.email ? item.email.trim().toLowerCase() : '',
+      password: item.password || (item.role === 'admin' ? 'admin' : '123'),
+      role: item.role || 'loja',
+      store_id: (item.storeId || item.store_id || '').trim() || null,
+      created_at: item.created_at || item.createdAt || new Date().toISOString()
+    };
+  }
+
+  if (type === 'stores') {
+    return {
+      id: item.id,
+      name: item.name || '',
+      code: item.code || '',
+      city: item.city || '',
+      uf: item.uf || '',
+      address: item.address || '',
+      active: item.active !== undefined ? Boolean(item.active) : true,
+      created_at: item.created_at || item.createdAt || new Date().toISOString()
+    };
+  }
 
   if (type === 'categories') {
-    if ('slaHours' in res) { res.sla_hours = res.slaHours; delete res.slaHours; }
+    return {
+      id: item.id,
+      name: item.name || '',
+      icon: item.icon || '🔧',
+      color: item.color || '#0E6E5D',
+      sla_hours: Number(item.slaHours ?? item.sla_hours ?? 48),
+      created_at: item.created_at || item.createdAt || new Date().toISOString()
+    };
   }
-  if (type === 'users') {
-    if ('storeId' in res) { res.store_id = res.storeId; delete res.storeId; }
+
+  if (type === 'statuses') {
+    return {
+      id: item.id,
+      label: item.label || '',
+      color: item.color || '#2255C9',
+      soft: item.soft || '#E5EBFB',
+      closed: Boolean(item.closed),
+      order: Number(item.order ?? 1)
+    };
   }
+
+  if (type === 'priorities') {
+    return {
+      id: item.id,
+      label: item.label || '',
+      color: item.color || '#6B7280',
+      soft: item.soft || '#EEF0F3',
+      weight: Number(item.weight ?? 1)
+    };
+  }
+
   if (type === 'tickets') {
-    if ('categoryId' in res) { res.category_id = res.categoryId; delete res.categoryId; }
-    if ('storeId' in res) { res.store_id = res.storeId; delete res.storeId; }
-    if ('requesterId' in res) { res.requester_id = res.requesterId; delete res.requesterId; }
-    if ('assigneeId' in res) { res.assignee_id = res.assigneeId; delete res.assigneeId; }
-    if ('serviceNotes' in res) { res.service_notes = res.serviceNotes; delete res.serviceNotes; }
-    if ('dueDate' in res) { res.due_date = res.dueDate; delete res.dueDate; }
-    if ('attestedBy' in res) { res.attested_by = res.attestedBy; delete res.attestedBy; }
-    if ('attestedAt' in res) { res.attested_at = res.attestedAt; delete res.attestedAt; }
-    if ('createdAt' in res) { res.created_at = res.createdAt; delete res.createdAt; }
-    if ('updatedAt' in res) { res.updated_at = res.updatedAt; delete res.updatedAt; }
+    return {
+      id: item.id,
+      year: Number(item.year || new Date().getFullYear()),
+      seq: Number(item.seq || 1),
+      title: item.title || '',
+      description: item.description || '',
+      category_id: (item.categoryId || item.category_id || '').trim() || null,
+      store_id: (item.storeId || item.store_id || '').trim() || null,
+      priority: (item.priority || '').trim() || null,
+      status: (item.status || '').trim() || null,
+      requester_id: (item.requesterId || item.requester_id || '').trim() || null,
+      assignee_id: (item.assigneeId || item.assignee_id || '').trim() || null,
+      budget: item.budget !== undefined ? String(item.budget) : '',
+      service_notes: item.serviceNotes || item.service_notes || '',
+      due_date: item.dueDate || item.due_date || null,
+      attested_by: item.attestedBy || item.attested_by || '',
+      attested_at: item.attestedAt || item.attested_at || '',
+      comments: Array.isArray(item.comments) ? item.comments : [],
+      history: Array.isArray(item.history) ? item.history : [],
+      attachments: Array.isArray(item.attachments) ? item.attachments : [],
+      created_at: item.createdAt || item.created_at || new Date().toISOString(),
+      updated_at: item.updatedAt || item.updated_at || new Date().toISOString()
+    };
   }
+
   if (type === 'alerts') {
-    if ('storeId' in res) { res.store_id = res.storeId; delete res.storeId; }
-    if ('categoryId' in res) { res.category_id = res.categoryId; delete res.categoryId; }
-    if ('dueDate' in res) { res.due_date = res.dueDate; delete res.dueDate; }
-    if ('linkedTicketId' in res) { res.linked_ticket_id = res.linkedTicketId; delete res.linkedTicketId; }
-    if ('createdAt' in res) { res.created_at = res.createdAt; delete res.createdAt; }
+    return {
+      id: item.id,
+      title: item.title || '',
+      store_id: (item.storeId || item.store_id || '').trim() || null,
+      category_id: (item.categoryId || item.category_id || '').trim() || null,
+      due_date: item.dueDate || item.due_date || '',
+      recurrence: item.recurrence || 'none',
+      status: item.status || 'ativo',
+      notes: item.notes || '',
+      linked_ticket_id: (item.linkedTicketId || item.linked_ticket_id || '').trim() || null,
+      created_at: item.createdAt || item.created_at || new Date().toISOString()
+    };
   }
-  return res;
+
+  return { ...item };
 }
 
 export function toCamelCase(item, type) {
@@ -43,13 +115,14 @@ export function toCamelCase(item, type) {
     res.slaHours = res.sla_hours ?? res.slaHours ?? 48;
   }
   if (type === 'users') {
-    res.storeId = res.store_id ?? res.storeId ?? '';
+    res.storeId = res.store_id || res.storeId || '';
+    res.password = res.password || (res.role === 'admin' ? 'admin' : '123');
   }
   if (type === 'tickets') {
-    res.categoryId = res.category_id ?? res.categoryId ?? '';
-    res.storeId = res.store_id ?? res.storeId ?? '';
-    res.requesterId = res.requester_id ?? res.requesterId ?? '';
-    res.assigneeId = res.assignee_id ?? res.assigneeId ?? '';
+    res.categoryId = res.category_id || res.categoryId || '';
+    res.storeId = res.store_id || res.storeId || '';
+    res.requesterId = res.requester_id || res.requesterId || '';
+    res.assigneeId = res.assignee_id || res.assigneeId || '';
     res.serviceNotes = res.service_notes ?? res.serviceNotes ?? '';
     res.dueDate = res.due_date ?? res.dueDate ?? '';
     res.attestedBy = res.attested_by ?? res.attestedBy ?? '';
@@ -61,10 +134,10 @@ export function toCamelCase(item, type) {
     res.attachments = Array.isArray(res.attachments) ? res.attachments : [];
   }
   if (type === 'alerts') {
-    res.storeId = res.store_id ?? res.storeId ?? '';
-    res.categoryId = res.category_id ?? res.categoryId ?? '';
+    res.storeId = res.store_id || res.storeId || '';
+    res.categoryId = res.category_id || res.categoryId || '';
     res.dueDate = res.due_date ?? res.dueDate ?? '';
-    res.linkedTicketId = res.linked_ticket_id ?? res.linkedTicketId ?? '';
+    res.linkedTicketId = res.linked_ticket_id || res.linkedTicketId || '';
     res.createdAt = res.created_at ?? res.createdAt;
   }
   return res;
@@ -131,26 +204,13 @@ export async function syncKeyToSupabase(key, items) {
 
   try {
     const formatted = items.map(item => toSnakeCase(item, key));
-    
-    // Obter IDs existentes para deletar itens removidos
-    const { data: existing, error: fetchErr } = await supabase.from(tableName).select('id');
-    if (fetchErr) {
-      console.warn(`Erro ao consultar IDs existentes de ${tableName}:`, fetchErr);
-    }
-    const existingIds = (existing || []).map(x => x.id);
-    const newIds = new Set(formatted.map(x => x.id));
-    const toDelete = existingIds.filter(id => !newIds.has(id));
-
-    if (toDelete.length > 0) {
-      await supabase.from(tableName).delete().in('id', toDelete);
-    }
 
     if (formatted.length > 0) {
-      let { error } = await supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
+      let { data, error } = await supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
       
       // Se der erro por falta da coluna 'password' na tabela app_users, faz fallback salvando os outros campos
       if (error && key === 'users' && (error.code === 'PGRST204' || error.message?.includes('password'))) {
-        console.warn('⚠️ A coluna "password" ainda não foi criada no Supabase. Salvando usuários sem a senha no banco (adicione a coluna "password TEXT" no Supabase).');
+        console.warn('⚠️ A coluna "password" ainda não foi criada no Supabase. Salvando usuários sem a senha no banco.');
         const withoutPassword = formatted.map(({ password, ...u }) => u);
         const retry = await supabase.from(tableName).upsert(withoutPassword, { onConflict: 'id' });
         error = retry.error;
@@ -161,6 +221,21 @@ export async function syncKeyToSupabase(key, items) {
         return { success: false, error };
       }
     }
+
+    // Exclusão de itens removidos (após o upsert para não quebrar)
+    try {
+      const { data: existing } = await supabase.from(tableName).select('id');
+      const existingIds = (existing || []).map(x => x.id);
+      const newIds = new Set(formatted.map(x => x.id));
+      const toDelete = existingIds.filter(id => !newIds.has(id));
+
+      if (toDelete.length > 0) {
+        await supabase.from(tableName).delete().in('id', toDelete);
+      }
+    } catch (delErr) {
+      console.warn(`Aviso na limpeza de registros excluídos em ${tableName}:`, delErr);
+    }
+
     return { success: true };
   } catch (err) {
     console.error(`❌ Erro de sincronização em ${tableName}:`, err);
