@@ -3,7 +3,7 @@ import {
   LayoutGrid, ClipboardList, Bell, Building2, Tag, Users, Plus, Search,
   X, Paperclip, Trash2, Pencil, Check, AlertTriangle,
   CalendarClock, MessageSquare, Loader2, Shield, Flag, SlidersHorizontal, BarChart3, Download, Info,
-  Cloud, RefreshCw, LogOut, Lock, Mail, Eye, EyeOff, KeyRound, UserCheck
+  Cloud, RefreshCw, LogOut, Lock, Mail, Eye, EyeOff, KeyRound, UserCheck, Menu
 } from "lucide-react";
 import {
   isSupabaseConfigured,
@@ -321,25 +321,9 @@ function useStore() {
         try {
           const supabaseData = await loadSupabaseData();
           if (!cancelled && supabaseData) {
-            let loadedData = { ...supabaseData };
-            
-            // Se a tabela de usuários estiver vazia no banco, garante o Administrador inicial
-            if (!loadedData.users || loadedData.users.length === 0) {
-              const defaultAdmin = {
-                id: "usr-admin-master",
-                name: "Administrador",
-                email: "admin@empresa.com",
-                password: "admin",
-                role: "admin",
-                storeId: ""
-              };
-              loadedData.users = [defaultAdmin];
-              syncKeyToSupabase('users', [defaultAdmin]).catch(() => {});
-            }
-
             if (!cancelled) {
               settledRef.current = true;
-              setData(loadedData);
+              setData(supabaseData);
               setReady(true);
             }
             return;
@@ -471,21 +455,6 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
       );
 
       if (!user) {
-        // Se ainda não houver usuários cadastrados no banco, autentica e provisiona o Administrador
-        if (users.length === 0 || ((cleanId === "admin@empresa.com" || cleanId === "admin") && cleanPass === "admin")) {
-          const adminUser = {
-            id: "usr-admin-master",
-            name: "Administrador",
-            email: "admin@empresa.com",
-            password: "admin",
-            role: "admin",
-            storeId: ""
-          };
-          syncKeyToSupabase('users', [adminUser]).catch(() => {});
-          onLogin(adminUser);
-          return;
-        }
-
         setError("Usuário não encontrado. Verifique o e-mail digitado.");
         setLoading(false);
         return;
@@ -663,6 +632,7 @@ function useCurrentUser(ready, users) {
 function Sidebar({ view, setView, counts, currentUser, stores, onLogout }) {
   const isAdmin = currentUser?.role === "admin";
   const userStore = stores?.find(s => s.id === currentUser?.storeId);
+  const [menuOpen, setMenuOpen] = useState(false);
   const items = [
     { id: "dashboard", label: "Painel", icon: LayoutGrid },
     { id: "tickets", label: "Demandas", icon: ClipboardList, badge: counts.open },
@@ -671,8 +641,9 @@ function Sidebar({ view, setView, counts, currentUser, stores, onLogout }) {
   if (isAdmin) items.push({ id: "reports", label: "Relatórios", icon: BarChart3 });
   if (isAdmin) items.push({ id: "admin", label: "Administração", icon: Shield });
 
-  return (
-    <div className="w-60 shrink-0 h-screen flex flex-col justify-between" style={{ backgroundColor: "var(--ink)" }}>
+  // --- Barra lateral (Desktop) ---
+  const desktopSidebar = (
+    <div className="hidden md:flex w-60 shrink-0 h-screen flex-col justify-between" style={{ backgroundColor: "var(--ink)" }}>
       <div>
         <div className="px-5 pt-6 pb-5">
           <div className="flex items-baseline gap-1">
@@ -731,7 +702,104 @@ function Sidebar({ view, setView, counts, currentUser, stores, onLogout }) {
       </div>
     </div>
   );
+
+  // --- Topo mobile ---
+  const mobileTopBar = (
+    <div className="md:hidden fixed top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-3" style={{ backgroundColor: "var(--ink)", borderBottom: "1px solid #262E3D" }}>
+      <span className="text-lg font-extrabold tracking-tight" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>Hellpp</span>
+      <div className="flex items-center gap-3">
+        <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold" style={{ backgroundColor: "var(--accent)", color: "#fff" }}>
+          {currentUser?.name?.split(" ").map(n => n[0]).slice(0, 2).join("") || "U"}
+        </div>
+        <button onClick={() => setMenuOpen(!menuOpen)} style={{ color: "#B7BECC" }}>
+          {menuOpen ? <X size={22} /> : <Menu size={22} />}
+        </button>
+      </div>
+    </div>
+  );
+
+  // --- Drawer mobile (menu lateral deslizante) ---
+  const mobileDrawer = menuOpen && (
+    <div className="md:hidden fixed inset-0 z-50" onClick={() => setMenuOpen(false)}>
+      <div className="absolute inset-0" style={{ backgroundColor: "rgba(0,0,0,0.5)" }} />
+      <div className="absolute top-0 left-0 bottom-0 w-72 flex flex-col justify-between" style={{ backgroundColor: "var(--ink)" }} onClick={e => e.stopPropagation()}>
+        <div>
+          <div className="px-5 pt-6 pb-4 flex items-center justify-between">
+            <span className="text-xl font-extrabold tracking-tight" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>Hellpp</span>
+            <button onClick={() => setMenuOpen(false)} style={{ color: "#8A93A6" }}><X size={20} /></button>
+          </div>
+          <nav className="px-3 flex flex-col gap-0.5 mt-2">
+            {items.map(it => {
+              const Icon = it.icon;
+              const active = view === it.id;
+              return (
+                <button key={it.id} onClick={() => { setView(it.id); setMenuOpen(false); }}
+                  className="flex items-center justify-between px-3 py-3 rounded-md text-sm transition"
+                  style={{ backgroundColor: active ? "rgba(14,110,93,0.25)" : "transparent", color: active ? "#fff" : "#B7BECC", borderLeft: active ? "2px solid var(--accent)" : "2px solid transparent" }}>
+                  <span className="flex items-center gap-3"><Icon size={18} />{it.label}</span>
+                  {!!it.badge && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style={{ backgroundColor: "var(--accent)", color: "#fff" }}>{it.badge}</span>}
+                </button>
+              );
+            })}
+          </nav>
+        </div>
+
+        <div className="px-4 py-4" style={{ borderTop: "1px solid #262E3D" }}>
+          <div className="rounded-lg p-3 mb-3 flex items-center gap-3" style={{ backgroundColor: "#1F2532", border: "1px solid #2B3242" }}>
+            <div className="w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: "var(--accent)", color: "#fff" }}>
+              {currentUser?.name?.split(" ").map(n => n[0]).slice(0, 2).join("") || "U"}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-white truncate">{currentUser?.name}</p>
+              <p className="text-xs truncate" style={{ color: "#8A93A6" }}>
+                {currentUser?.role === "admin" ? "Administrador" : (userStore?.name || "Loja")}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onLogout}
+            className="w-full flex items-center justify-center gap-2 text-sm rounded-md py-2.5 font-medium transition"
+            style={{ backgroundColor: "rgba(208,52,44,0.12)", color: "#F87171", border: "1px solid rgba(208,52,44,0.3)" }}
+          >
+            <LogOut size={15} /> Sair do sistema
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // --- Bottom nav mobile ---
+  const mobileBottomNav = (
+    <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around px-2 py-2" style={{ backgroundColor: "var(--ink)", borderTop: "1px solid #262E3D" }}>
+      {items.slice(0, 5).map(it => {
+        const Icon = it.icon;
+        const active = view === it.id;
+        return (
+          <button key={it.id} onClick={() => setView(it.id)}
+            className="flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg transition relative"
+            style={{ color: active ? "var(--accent)" : "#6B7383", minWidth: 48 }}>
+            <Icon size={20} />
+            {!!it.badge && (
+              <span className="absolute -top-0.5 right-0.5 text-[9px] font-bold px-1 py-0 rounded-full" style={{ backgroundColor: "var(--accent)", color: "#fff" }}>{it.badge}</span>
+            )}
+            <span className="text-[10px] font-medium">{it.label}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <>
+      {desktopSidebar}
+      {mobileTopBar}
+      {mobileDrawer}
+      {mobileBottomNav}
+    </>
+  );
 }
+
 
 /* ------------------------------------------------------------------ */
 /* Dashboard                                                            */
@@ -765,7 +833,7 @@ function Dashboard({ data, currentUser, sinceLogin, onGoTickets, onGoAlerts }) {
   const recent = [...scoped].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5);
 
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-4 md:p-8 max-w-6xl">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Painel</h1>
@@ -1279,7 +1347,7 @@ function TicketsView({ data, update, currentUser, initialFilters, initialOpenId 
   function deleteTicket(id) { update("tickets", data.tickets.filter(x => x.id !== id)); setOpenTicket(null); }
 
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-4 md:p-8 max-w-6xl">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Demandas</h1>
         <Button onClick={() => setShowForm(true)}><Plus size={15} /> Nova demanda</Button>
@@ -1396,7 +1464,7 @@ function AlertsView({ data, update, currentUser }) {
   }
 
   return (
-    <div className="p-8 max-w-4xl">
+    <div className="p-4 md:p-8 max-w-4xl">
       <div className="flex items-center justify-between mb-1">
         <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Alertas de vencimento</h1>
         <Button onClick={() => { setEditing(null); setShowForm(true); }}><Plus size={15} /> Novo alerta</Button>
@@ -1799,7 +1867,7 @@ function ReportsView({ data }) {
   }
 
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-4 md:p-8 max-w-6xl">
       <h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Relatórios</h1>
       <p className="text-sm mt-1 mb-5" style={{ color: "var(--muted)" }}>Panorama gerencial das demandas por período.</p>
 
@@ -1865,7 +1933,7 @@ function AdminView({ data, update }) {
     { id: "prioridades", label: "Prioridades", icon: Flag },
   ];
   return (
-    <div className="p-8 max-w-5xl">
+    <div className="p-4 md:p-8 max-w-5xl">
       <div className="flex items-center gap-2 mb-1"><Shield size={18} color="var(--accent)" /><h1 className="text-xl font-bold" style={{ color: "var(--ink)" }}>Administração</h1></div>
       <p className="text-sm mb-5" style={{ color: "var(--muted)" }}>Área restrita a usuários master: usuários, lojas, categorias, status e prioridades.</p>
       <div className="flex gap-1 mb-6 flex-wrap" style={{ borderBottom: "1px solid var(--border)" }}>
@@ -1981,7 +2049,8 @@ export default function App() {
         stores={data.stores}
         onLogout={logoutUser}
       />
-      <div className="flex-1 overflow-y-auto" style={{ maxHeight: "100vh" }}>
+      {/* md: sem padding pois sidebar já ocupa espaço; mobile: padding-top para topbar e padding-bottom para bottomnav */}
+      <div className="flex-1 overflow-y-auto pt-14 pb-20 md:pt-0 md:pb-0" style={{ maxHeight: "100vh" }}>
         {view === "dashboard" && <Dashboard data={data} currentUser={currentUser} sinceLogin={sinceLogin} onGoTickets={goToTickets} onGoAlerts={goToAlerts} />}
         {view === "tickets" && <TicketsView data={data} update={update} currentUser={currentUser} initialFilters={ticketsNav.filters} initialOpenId={ticketsNav.openId} />}
         {view === "alerts" && <AlertsView data={data} update={update} currentUser={currentUser} />}
