@@ -30,11 +30,58 @@ CREATE TABLE IF NOT EXISTS public.app_users (
     auth_id UUID,
     name TEXT NOT NULL,
     email TEXT,
-    password TEXT DEFAULT '123456',
+    password TEXT,
     role TEXT NOT NULL DEFAULT 'loja', -- 'admin' ou 'loja'
     store_id TEXT REFERENCES public.stores(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Atualização segura para projetos criados antes do campo de senha existir.
+-- CREATE TABLE IF NOT EXISTS não acrescenta colunas em tabelas já existentes.
+ALTER TABLE public.app_users
+ADD COLUMN IF NOT EXISTS password TEXT;
+
+-- Não usa senha padrão: a senha deve ser informada no cadastro ou edição.
+ALTER TABLE public.app_users
+ALTER COLUMN password DROP DEFAULT;
+
+-- Impede novos usuários sem senha, sem invalidar registros antigos que ainda
+-- precisem ser corrigidos manualmente.
+ALTER TABLE public.app_users DROP CONSTRAINT IF EXISTS app_users_password_required;
+ALTER TABLE public.app_users
+ADD CONSTRAINT app_users_password_required
+CHECK (password IS NOT NULL AND length(btrim(password)) > 0) NOT VALID;
+
+-- Garante e-mail único mesmo se dois administradores usarem computadores
+-- diferentes ao mesmo tempo. Registros duplicados antigos não são apagados.
+CREATE OR REPLACE FUNCTION public.ensure_unique_app_user_email()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.email := lower(btrim(NEW.email));
+
+  IF NEW.email IS NULL OR NEW.email = '' THEN
+    RAISE EXCEPTION 'O e-mail do usuário é obrigatório';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.app_users
+    WHERE lower(email) = NEW.email
+      AND id IS DISTINCT FROM NEW.id
+  ) THEN
+    RAISE EXCEPTION 'Já existe um usuário cadastrado com este e-mail';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS app_users_unique_email ON public.app_users;
+CREATE TRIGGER app_users_unique_email
+BEFORE INSERT OR UPDATE OF email ON public.app_users
+FOR EACH ROW EXECUTE FUNCTION public.ensure_unique_app_user_email();
 
 -- 4. Tabela de Status de O.S.
 CREATE TABLE IF NOT EXISTS public.statuses (
@@ -148,4 +195,3 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO public.app_users (id, name, email, password, role, store_id) VALUES
 ('usr-admin-master', 'Administrador', 'admin@empresa.com', 'admin', 'admin', NULL)
 ON CONFLICT (id) DO NOTHING;
-

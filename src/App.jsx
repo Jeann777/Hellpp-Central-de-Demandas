@@ -9,7 +9,7 @@ import {
   isSupabaseConfigured,
   loadSupabaseData,
   syncKeyToSupabase,
-  seedSupabaseIfEmpty,
+  deleteUserFromSupabase,
   subscribeToSupabase
 } from "./lib/supabaseSync.js";
 
@@ -38,10 +38,6 @@ const TOKENS = `
     --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, monospace;
   }
 `;
-
-const DATA_KEY = "od_app_data_v2";
-const CURRENT_USER_KEY = "od_current_user_id";
-const LAST_LOGIN_KEY = "od_last_login_map";
 
 const DEFAULT_STATUSES = [
   { id: "aberta", label: "Aberta", color: "#2255C9", soft: "#E5EBFB", closed: false, order: 1 },
@@ -98,7 +94,7 @@ function uid() { return Math.random().toString(36).slice(2, 9) + Date.now().toSt
 function normalizeUser(u) {
   let role = u.role === "admin" ? "admin" : "loja";
   let storeId = u.storeId || (Array.isArray(u.storeIds) && u.storeIds.length ? u.storeIds[0] : "") || "";
-  let password = u.password || (role === "admin" ? "admin" : "123");
+  let password = u.password || "";
   const { storeIds, ...rest } = u;
   return { ...rest, role, storeId, password };
 }
@@ -300,12 +296,12 @@ function useStore() {
   const [isSyncing, setIsSyncing] = useState(false);
   const settledRef = React.useRef(false);
 
-  // Rede de segurança: se por qualquer motivo demorar mais de 8s, libera com seedData
+  // Não usa dados locais: se a conexão demorar, exibe o estado online indisponível.
   useEffect(() => {
     const t = setTimeout(() => {
       if (!settledRef.current) {
         settledRef.current = true;
-        setData(seedData());
+        setSaveError(true);
         setReady(true);
       }
     }, 8000);
@@ -316,7 +312,7 @@ function useStore() {
     let cancelled = false;
 
     (async () => {
-      // 1. Tenta carregar do Supabase se configurado
+      // Carrega exclusivamente do Supabase para que os dados sejam os mesmos em qualquer computador.
       if (isSupabaseConfigured) {
         try {
           const supabaseData = await loadSupabaseData();
@@ -350,37 +346,9 @@ function useStore() {
       }
 
       if (cancelled) return;
-
-      // 2. Fallback para storage local
-      let parsed = null;
-      try {
-        const r = await window.storage?.get(DATA_KEY, true);
-        parsed = r ? JSON.parse(r.value) : null;
-      } catch { parsed = null; }
-
-      if (cancelled) return;
-
-      if (!parsed) {
-        const seed = seedData();
-        try { await window.storage?.set(DATA_KEY, JSON.stringify(seed), true); } catch { if (!cancelled) setSaveError(true); }
-        if (!cancelled) { settledRef.current = true; setData(seed); setReady(true); }
-        return;
-      }
-
-      const savedStatuses = parsed.statuses && parsed.statuses.length ? parsed.statuses : DEFAULT_STATUSES.map(s => ({ ...s }));
-      const missingStatuses = DEFAULT_STATUSES.filter(ds => !savedStatuses.some(s => s.id === ds.id));
-      const mergedStatuses = [...savedStatuses, ...missingStatuses.map(s => ({ ...s }))];
-      const merged = {
-        stores: parsed.stores || [],
-        categories: parsed.categories || [],
-        users: (parsed.users || []).map(normalizeUser),
-        tickets: (parsed.tickets || []).map(t => ({ budget: "", serviceNotes: "", updatedAt: t.createdAt, attestedBy: "", attestedAt: "", ...t })),
-        alerts: parsed.alerts || [],
-        statuses: mergedStatuses,
-        priorities: parsed.priorities && parsed.priorities.length ? parsed.priorities : DEFAULT_PRIORITIES.map(p => ({ ...p })),
-      };
-
-      if (!cancelled) { settledRef.current = true; setData(merged); setReady(true); }
+      settledRef.current = true;
+      setSaveError(true);
+      setReady(true);
     })();
 
     return () => { cancelled = true; };
@@ -412,25 +380,29 @@ function useStore() {
     };
   }, [ready]);
 
-  function update(key, value) {
-    setData(prev => {
-      const next = { ...prev, [key]: value };
-      
-      // Sincroniza com Supabase em segundo plano
-      if (isSupabaseConfigured) {
-        syncKeyToSupabase(key, value).catch(err => {
-          console.error(`Erro ao sincronizar ${key} com Supabase:`, err);
-          setSaveError(true);
-        });
-      }
+  async function update(key, value, previousValue) {
+    setData(prev => ({ ...prev, [key]: value }));
 
-      // Mantém espelho no localStorage
-      try {
-        window.storage?.set(DATA_KEY, JSON.stringify(next), true)?.catch(() => setSaveError(true));
-      } catch {}
+    if (!isSupabaseConfigured) {
+      const result = { success: false, error: 'Supabase não configurado' };
+      setSaveError(true);
+      return result;
+    }
 
-      return next;
-    });
+    setIsSyncing(true);
+    const itemsToPersist = key === "users" && previousValue
+      ? value.filter(user => {
+          const previous = previousValue.find(item => item.id === user.id);
+          return !previous || previous.name !== user.name || previous.email !== user.email || previous.password !== user.password || previous.role !== user.role || previous.storeId !== user.storeId;
+        })
+      : value;
+    const result = await syncKeyToSupabase(key, itemsToPersist);
+    setIsSyncing(false);
+    if (!result.success) {
+      setSaveError(true);
+      if (previousValue !== undefined) setData(prev => ({ ...prev, [key]: previousValue }));
+    }
+    return result;
   }
 
   return { data, ready, update, saveError, isSyncing, isCloud: isSupabaseConfigured };
@@ -463,7 +435,7 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
     }
 
     setLoading(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       // Procura por email (case-insensitive) ou nome
       const user = users.find(u =>
         (u.email && u.email.trim().toLowerCase() === cleanId) ||
@@ -471,27 +443,12 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
       );
 
       if (!user) {
-        // Se ainda não houver usuários cadastrados no banco, autentica e provisiona o Administrador
-        if (users.length === 0 || ((cleanId === "admin@empresa.com" || cleanId === "admin") && cleanPass === "admin")) {
-          const adminUser = {
-            id: "usr-admin-master",
-            name: "Administrador",
-            email: "admin@empresa.com",
-            password: "admin",
-            role: "admin",
-            storeId: ""
-          };
-          syncKeyToSupabase('users', [adminUser]).catch(() => {});
-          onLogin(adminUser);
-          return;
-        }
-
         setError("Usuário não encontrado. Verifique o e-mail digitado.");
         setLoading(false);
         return;
       }
 
-      const validPassword = user.password || (user.role === "admin" ? "admin" : "123");
+      const validPassword = user.password;
       if (cleanPass === validPassword) {
         onLogin(user);
       } else {
@@ -617,32 +574,15 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
 }
 
 function useCurrentUser(ready, users) {
-  const [session, setSession] = useState(() => {
-    try {
-      const stored = localStorage.getItem(CURRENT_USER_KEY);
-      if (!stored) return null;
-      if (stored.startsWith('{')) {
-        return JSON.parse(stored);
-      }
-      return { id: stored };
-    } catch { return null; }
-  });
+  const [session, setSession] = useState(null);
 
   function loginUser(user) {
     const userObj = typeof user === 'object' ? user : { id: user };
     setSession(userObj);
-    try {
-      localStorage.setItem(CURRENT_USER_KEY, JSON.stringify(userObj));
-      window.storage?.set(CURRENT_USER_KEY, JSON.stringify(userObj), false)?.catch(() => {});
-    } catch {}
   }
 
   function logoutUser() {
     setSession(null);
-    try {
-      localStorage.removeItem(CURRENT_USER_KEY);
-      window.storage?.delete?.(CURRENT_USER_KEY)?.catch(() => {});
-    } catch {}
   }
 
   // Mantém o usuário atual ativo, mesclando atualizações do banco sem nunca derrubar a sessão
@@ -1717,22 +1657,41 @@ function CategoryFormModal({ initial, onCancel, onSave }) {
 function UsersView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
-  function save(f) {
+  async function save(f) {
     const payload = {
       name: f.name.trim(),
       email: f.email.trim().toLowerCase(),
-      password: f.password?.trim() || (f.role === "admin" ? "admin" : "123"),
+      password: f.password.trim(),
       role: f.role,
       storeId: f.role === "admin" ? "" : (f.storeId || "")
     };
-    if (editing) update("users", data.users.map(u => u.id === editing.id ? { ...u, ...payload } : u));
-    else update("users", [...data.users, { id: uid(), ...payload }]);
+    const duplicate = data.users.find(user =>
+      user.email?.trim().toLowerCase() === payload.email && user.id !== editing?.id
+    );
+    if (duplicate) {
+      alert("Já existe um usuário cadastrado com este e-mail.");
+      return;
+    }
+    const users = editing
+      ? data.users.map(u => u.id === editing.id ? { ...u, ...payload } : u)
+      : [...data.users, { id: uid(), ...payload }];
+    const result = await update("users", users, data.users);
+    if (!result.success) {
+      alert("Não foi possível salvar o usuário no Supabase. Verifique a conexão e tente novamente.");
+      return;
+    }
     setShowForm(false); setEditing(null);
   }
-  function remove(id) {
+  async function remove(id) {
     const u = data.users.find(x => x.id === id);
     if (u?.role === "admin" && data.users.filter(x => x.role === "admin").length <= 1) { alert("Deve existir ao menos um usuário administrador."); return; }
-    update("users", data.users.filter(u => u.id !== id));
+    const deletion = await deleteUserFromSupabase(id);
+    if (!deletion.success) {
+      alert("Não foi possível excluir o usuário no Supabase. Tente novamente.");
+      return;
+    }
+    const result = await update("users", data.users.filter(u => u.id !== id));
+    if (!result.success) alert("O usuário foi excluído no Supabase, mas a tela não pôde ser atualizada. Recarregue a página.");
   }
   return (
     <>
@@ -1750,7 +1709,7 @@ function UsersView({ data, update }) {
                 <Pill label={ROLES.find(r => r.id === u.role)?.label} color="var(--accent)" soft="var(--accent-soft)" />
               </div>
               <p className="text-xs truncate mt-0.5" style={{ color: "var(--faint)" }}>
-                <strong>Login:</strong> {u.email} · <strong>Senha:</strong> <span className="font-mono text-gray-700 bg-gray-100 px-1 py-0.5 rounded">{u.password || "123"}</span> · {u.role === "admin" ? "Acesso total" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
+                <strong>Login:</strong> {u.email} · <strong>Senha:</strong> <span className="font-mono text-gray-700 bg-gray-100 px-1 py-0.5 rounded">{u.password || "Não definida"}</span> · {u.role === "admin" ? "Acesso total" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
               </p>
             </div>
             <div className="flex gap-1"><IconBtn onClick={() => { setEditing(u); setShowForm(true); }} title="Editar dados e senha"><Pencil size={15} /></IconBtn><IconBtn onClick={() => remove(u.id)} title="Excluir usuário"><Trash2 size={15} /></IconBtn></div>
@@ -1766,13 +1725,13 @@ function UserFormModal({ initial, stores, onCancel, onSave }) {
   const [f, setF] = useState(initial ? {
     name: initial.name,
     email: initial.email,
-    password: initial.password || "123",
+    password: initial.password || "",
     role: initial.role,
     storeId: initial.storeId || ""
   } : {
     name: "",
     email: "",
-    password: "123",
+    password: "",
     role: "loja",
     storeId: stores[0]?.id || ""
   });
@@ -2085,24 +2044,12 @@ export default function App() {
     if ((view === "admin" || view === "reports") && ready && currentUser && currentUser.role !== "admin") setView("dashboard");
   }, [view, ready, currentUser]);
 
-  // Ao logar, avisa quantas demandas precisam de atenção
+  // Sem persistência no navegador, a sessão atual inicia a contagem de avisos.
   useEffect(() => {
     if (!ready || !currentUser) return;
     if (loginCheckedRef.current === currentUser.id) return;
     loginCheckedRef.current = currentUser.id;
-    (async () => {
-      let map = {};
-      try { const r = await window.storage.get(LAST_LOGIN_KEY, false); map = r ? JSON.parse(r.value) : {}; } catch { map = {}; }
-      const previous = map[currentUser.id];
-      setSinceLogin(previous || null);
-      if (previous) {
-        const scoped = currentUser.role === "admin" ? data.tickets : data.tickets.filter(t => t.storeId === currentUser.storeId);
-        const count = scoped.filter(t => !isClosedStatus(data, t.status) && t.updatedAt && t.updatedAt > previous).length;
-        if (count > 0) setLoginNotice({ count });
-      }
-      map[currentUser.id] = new Date().toISOString();
-      window.storage.set(LAST_LOGIN_KEY, JSON.stringify(map), false).catch(() => {});
-    })();
+    setSinceLogin(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, currentUser?.id]);
 

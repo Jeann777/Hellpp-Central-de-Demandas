@@ -11,6 +11,7 @@ export function toSnakeCase(item, type) {
       id: item.id,
       name: item.name || '',
       email: item.email ? item.email.trim().toLowerCase() : '',
+      password: item.password?.trim() || '',
       role: item.role || 'loja',
       store_id: (item.storeId || item.store_id || '').trim() || null,
       created_at: item.created_at || item.createdAt || new Date().toISOString()
@@ -115,7 +116,7 @@ export function toCamelCase(item, type) {
   }
   if (type === 'users') {
     res.storeId = res.store_id || res.storeId || '';
-    res.password = res.password || (res.role === 'admin' ? 'admin' : '123');
+    res.password = res.password || '';
   }
   if (type === 'tickets') {
     res.categoryId = res.category_id || res.categoryId || '';
@@ -205,13 +206,26 @@ export async function syncKeyToSupabase(key, items) {
     const formatted = items.map(item => toSnakeCase(item, key));
 
     if (formatted.length > 0) {
-      const { data, error } = await supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
+      let query = supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
+      if (key === 'users') query = query.select('id, password');
+      const { data, error } = await query;
 
       if (error) {
         console.error(`❌ Erro ao salvar ${tableName} no Supabase:`, error);
         return { success: false, error };
       }
+
+      if (key === 'users') {
+        const passwordsMatch = formatted.every(user =>
+          data?.some(saved => saved.id === user.id && saved.password === user.password)
+        );
+        if (!passwordsMatch) return { success: false, error: 'O Supabase não confirmou a senha informada.' };
+      }
     }
+
+    // Usuários são gravados individualmente. Nunca removemos usuários que não
+    // estejam na cópia desta tela, pois ela pode estar desatualizada.
+    if (key === 'users') return { success: true };
 
     // Exclusão de itens removidos (após o upsert para não quebrar)
     try {
@@ -231,6 +245,18 @@ export async function syncKeyToSupabase(key, items) {
   } catch (err) {
     console.error(`❌ Erro de sincronização em ${tableName}:`, err);
     return { success: false, error: err };
+  }
+}
+
+export async function deleteUserFromSupabase(id) {
+  if (!isSupabaseConfigured || !supabase) return { success: false, error: 'Supabase não configurado' };
+
+  try {
+    const { error } = await supabase.from('app_users').delete().eq('id', id);
+    if (error) return { success: false, error };
+    return { success: true };
+  } catch (error) {
+    return { success: false, error };
   }
 }
 
