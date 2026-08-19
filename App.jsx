@@ -94,7 +94,7 @@ function uid() { return Math.random().toString(36).slice(2, 9) + Date.now().toSt
 function normalizeUser(u) {
   let role = u.role === "admin" ? "admin" : "loja";
   let storeId = u.storeId || (Array.isArray(u.storeIds) && u.storeIds.length ? u.storeIds[0] : "") || "";
-  let password = u.password || (role === "admin" ? "admin" : "123");
+  let password = u.password || "";
   const { storeIds, ...rest } = u;
   return { ...rest, role, storeId, password };
 }
@@ -442,7 +442,7 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
         return;
       }
 
-      const validPassword = user.password || (user.role === "admin" ? "admin" : "123");
+      const validPassword = user.password;
       if (cleanPass === validPassword) {
         onLogin(user);
       } else {
@@ -1655,7 +1655,7 @@ function UsersView({ data, update }) {
     const payload = {
       name: f.name.trim(),
       email: f.email.trim().toLowerCase(),
-      password: f.password?.trim() || (f.role === "admin" ? "admin" : "123"),
+      password: f.password.trim(),
       role: f.role,
       storeId: f.role === "admin" ? "" : (f.storeId || "")
     };
@@ -1696,7 +1696,7 @@ function UsersView({ data, update }) {
                 <Pill label={ROLES.find(r => r.id === u.role)?.label} color="var(--accent)" soft="var(--accent-soft)" />
               </div>
               <p className="text-xs truncate mt-0.5" style={{ color: "var(--faint)" }}>
-                <strong>Login:</strong> {u.email} · <strong>Senha:</strong> <span className="font-mono text-gray-700 bg-gray-100 px-1 py-0.5 rounded">{u.password || "123"}</span> · {u.role === "admin" ? "Acesso total" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
+                <strong>Login:</strong> {u.email} · <strong>Senha:</strong> <span className="font-mono text-gray-700 bg-gray-100 px-1 py-0.5 rounded">{u.password || "Não definida"}</span> · {u.role === "admin" ? "Acesso total" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
               </p>
             </div>
             <div className="flex gap-1"><IconBtn onClick={() => { setEditing(u); setShowForm(true); }} title="Editar dados e senha"><Pencil size={15} /></IconBtn><IconBtn onClick={() => remove(u.id)} title="Excluir usuário"><Trash2 size={15} /></IconBtn></div>
@@ -1712,13 +1712,13 @@ function UserFormModal({ initial, stores, onCancel, onSave }) {
   const [f, setF] = useState(initial ? {
     name: initial.name,
     email: initial.email,
-    password: initial.password || "123",
+    password: initial.password || "",
     role: initial.role,
     storeId: initial.storeId || ""
   } : {
     name: "",
     email: "",
-    password: "123",
+    password: "",
     role: "loja",
     storeId: stores[0]?.id || ""
   });

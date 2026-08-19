@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS public.app_users (
     auth_id UUID,
     name TEXT NOT NULL,
     email TEXT,
-    password TEXT DEFAULT '123456',
+    password TEXT,
     role TEXT NOT NULL DEFAULT 'loja', -- 'admin' ou 'loja'
     store_id TEXT REFERENCES public.stores(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT now()
@@ -39,12 +39,11 @@ CREATE TABLE IF NOT EXISTS public.app_users (
 -- Atualização segura para projetos criados antes do campo de senha existir.
 -- CREATE TABLE IF NOT EXISTS não acrescenta colunas em tabelas já existentes.
 ALTER TABLE public.app_users
-ADD COLUMN IF NOT EXISTS password TEXT DEFAULT '123456';
+ADD COLUMN IF NOT EXISTS password TEXT;
 
--- Senhas dos registros antigos que ainda não possuíam esse campo.
-UPDATE public.app_users
-SET password = CASE WHEN role = 'admin' THEN 'admin' ELSE '123' END
-WHERE password IS NULL;
+-- Não usa senha padrão: a senha deve ser informada no cadastro ou edição.
+ALTER TABLE public.app_users
+ALTER COLUMN password DROP DEFAULT;
 
 -- 4. Tabela de Status de O.S.
 CREATE TABLE IF NOT EXISTS public.statuses (
