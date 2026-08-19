@@ -11,6 +11,7 @@ export function toSnakeCase(item, type) {
       id: item.id,
       name: item.name || '',
       email: item.email ? item.email.trim().toLowerCase() : '',
+      password: item.password || (item.role === 'admin' ? 'admin' : '123'),
       role: item.role || 'loja',
       store_id: (item.storeId || item.store_id || '').trim() || null,
       created_at: item.created_at || item.createdAt || new Date().toISOString()
