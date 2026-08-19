@@ -390,7 +390,13 @@ function useStore() {
     }
 
     setIsSyncing(true);
-    const result = await syncKeyToSupabase(key, value);
+    const itemsToPersist = key === "users" && previousValue
+      ? value.filter(user => {
+          const previous = previousValue.find(item => item.id === user.id);
+          return !previous || previous.name !== user.name || previous.email !== user.email || previous.password !== user.password || previous.role !== user.role || previous.storeId !== user.storeId;
+        })
+      : value;
+    const result = await syncKeyToSupabase(key, itemsToPersist);
     setIsSyncing(false);
     if (!result.success) {
       setSaveError(true);
@@ -1659,6 +1665,13 @@ function UsersView({ data, update }) {
       role: f.role,
       storeId: f.role === "admin" ? "" : (f.storeId || "")
     };
+    const duplicate = data.users.find(user =>
+      user.email?.trim().toLowerCase() === payload.email && user.id !== editing?.id
+    );
+    if (duplicate) {
+      alert("Já existe um usuário cadastrado com este e-mail.");
+      return;
+    }
     const users = editing
       ? data.users.map(u => u.id === editing.id ? { ...u, ...payload } : u)
       : [...data.users, { id: uid(), ...payload }];

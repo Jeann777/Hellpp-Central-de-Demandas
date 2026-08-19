@@ -45,6 +45,44 @@ ADD COLUMN IF NOT EXISTS password TEXT;
 ALTER TABLE public.app_users
 ALTER COLUMN password DROP DEFAULT;
 
+-- Impede novos usuários sem senha, sem invalidar registros antigos que ainda
+-- precisem ser corrigidos manualmente.
+ALTER TABLE public.app_users DROP CONSTRAINT IF EXISTS app_users_password_required;
+ALTER TABLE public.app_users
+ADD CONSTRAINT app_users_password_required
+CHECK (password IS NOT NULL AND length(btrim(password)) > 0) NOT VALID;
+
+-- Garante e-mail único mesmo se dois administradores usarem computadores
+-- diferentes ao mesmo tempo. Registros duplicados antigos não são apagados.
+CREATE OR REPLACE FUNCTION public.ensure_unique_app_user_email()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.email := lower(btrim(NEW.email));
+
+  IF NEW.email IS NULL OR NEW.email = '' THEN
+    RAISE EXCEPTION 'O e-mail do usuário é obrigatório';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.app_users
+    WHERE lower(email) = NEW.email
+      AND id IS DISTINCT FROM NEW.id
+  ) THEN
+    RAISE EXCEPTION 'Já existe um usuário cadastrado com este e-mail';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS app_users_unique_email ON public.app_users;
+CREATE TRIGGER app_users_unique_email
+BEFORE INSERT OR UPDATE OF email ON public.app_users
+FOR EACH ROW EXECUTE FUNCTION public.ensure_unique_app_user_email();
+
 -- 4. Tabela de Status de O.S.
 CREATE TABLE IF NOT EXISTS public.statuses (
     id TEXT PRIMARY KEY,
