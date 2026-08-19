@@ -9,7 +9,7 @@ import {
   isSupabaseConfigured,
   loadSupabaseData,
   syncKeyToSupabase,
-  seedSupabaseIfEmpty,
+  deleteUserFromSupabase,
   subscribeToSupabase
 } from "./lib/supabaseSync.js";
 
@@ -437,27 +437,6 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
       );
 
       if (!user) {
-        // Só provisiona o administrador inicial após o Supabase confirmar a gravação.
-        const isInitialAdminLogin = (cleanId === "admin@empresa.com" || cleanId === "admin") && cleanPass === "admin";
-        if (isCloud && users.length === 0 && isInitialAdminLogin) {
-          const adminUser = {
-            id: "usr-admin-master",
-            name: "Administrador",
-            email: "admin@empresa.com",
-            password: "admin",
-            role: "admin",
-            storeId: ""
-          };
-          const result = await syncKeyToSupabase('users', [adminUser]);
-          if (result.success) {
-            onLogin(adminUser);
-            return;
-          }
-          setError("Não foi possível criar o administrador no Supabase. Tente novamente.");
-          setLoading(false);
-          return;
-        }
-
         setError("Usuário não encontrado. Verifique o e-mail digitado.");
         setLoading(false);
         return;
@@ -1693,8 +1672,13 @@ function UsersView({ data, update }) {
   async function remove(id) {
     const u = data.users.find(x => x.id === id);
     if (u?.role === "admin" && data.users.filter(x => x.role === "admin").length <= 1) { alert("Deve existir ao menos um usuário administrador."); return; }
-    const result = await update("users", data.users.filter(u => u.id !== id), data.users);
-    if (!result.success) alert("Não foi possível excluir o usuário no Supabase. Tente novamente.");
+    const deletion = await deleteUserFromSupabase(id);
+    if (!deletion.success) {
+      alert("Não foi possível excluir o usuário no Supabase. Tente novamente.");
+      return;
+    }
+    const result = await update("users", data.users.filter(u => u.id !== id));
+    if (!result.success) alert("O usuário foi excluído no Supabase, mas a tela não pôde ser atualizada. Recarregue a página.");
   }
   return (
     <>

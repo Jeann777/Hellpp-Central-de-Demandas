@@ -214,6 +214,10 @@ export async function syncKeyToSupabase(key, items) {
       }
     }
 
+    // Usuários são gravados individualmente. Nunca removemos usuários que não
+    // estejam na cópia desta tela, pois ela pode estar desatualizada.
+    if (key === 'users') return { success: true };
+
     // Exclusão de itens removidos (após o upsert para não quebrar)
     try {
       const { data: existing } = await supabase.from(tableName).select('id');
@@ -232,6 +236,18 @@ export async function syncKeyToSupabase(key, items) {
   } catch (err) {
     console.error(`❌ Erro de sincronização em ${tableName}:`, err);
     return { success: false, error: err };
+  }
+}
+
+export async function deleteUserFromSupabase(id) {
+  if (!isSupabaseConfigured || !supabase) return { success: false, error: 'Supabase não configurado' };
+
+  try {
+    const { error } = await supabase.from('app_users').delete().eq('id', id);
+    if (error) return { success: false, error };
+    return { success: true };
+  } catch (error) {
+    return { success: false, error };
   }
 }
 
