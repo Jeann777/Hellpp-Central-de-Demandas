@@ -218,6 +218,10 @@ export async function loadSupabaseData() {
 // Salva dados no Supabase quando alterados
 export async function syncKeyToSupabase(key, items) {
   if (!isSupabaseConfigured || !supabase) return { success: false, error: 'Supabase não configurado' };
+  
+  // Usuários são gerenciados exclusivamente via RPC seguro (admin_create_or_update_user e admin_delete_user)
+  if (key === 'users') return { success: true };
+
   const tableName = TABLE_MAP[key];
   if (!tableName || !Array.isArray(items)) return { success: false, error: 'Tabela inválida ou dados não são array' };
 
@@ -233,10 +237,6 @@ export async function syncKeyToSupabase(key, items) {
         return { success: false, error };
       }
     }
-
-    // Usuários são gravados individualmente. Nunca removemos usuários que não
-    // estejam na cópia desta tela, pois ela pode estar desatualizada.
-    if (key === 'users') return { success: true };
 
     // Exclusão de itens removidos (após o upsert para não quebrar)
     try {
@@ -273,31 +273,6 @@ export async function deleteUserFromSupabase(id) {
     return { success: false, error };
   }
 }
-
-// Inicializa dados no Supabase se as tabelas principais estiverem vazias
-export async function seedSupabaseIfEmpty(seed) {
-  if (!isSupabaseConfigured || !supabase || !seed) return;
-
-  try {
-    const { count: usersCount } = await supabase.from('app_users').select('*', { count: 'exact', head: true });
-    if (!usersCount || usersCount === 0) {
-      console.log('🌱 Inicializando usuários padrão no Supabase...');
-      if (seed.users?.length) await syncKeyToSupabase('users', seed.users);
-    }
-
-    const { count: storesCount } = await supabase.from('stores').select('*', { count: 'exact', head: true });
-    if (!storesCount || storesCount === 0) {
-      console.log('🌱 Inicializando lojas e categorias no Supabase...');
-      if (seed.stores?.length) await syncKeyToSupabase('stores', seed.stores);
-      if (seed.categories?.length) await syncKeyToSupabase('categories', seed.categories);
-      if (seed.tickets?.length) await syncKeyToSupabase('tickets', seed.tickets);
-      if (seed.alerts?.length) await syncKeyToSupabase('alerts', seed.alerts);
-    }
-  } catch (err) {
-    console.error('Erro ao verificar/popular seed inicial:', err);
-  }
-}
-
 
 // Inicia escuta Realtime
 export function subscribeToSupabase(onUpdate) {

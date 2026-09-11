@@ -45,7 +45,7 @@ export async function fetchUserProfile(authUser) {
     const { data, error } = await supabase
       .from('app_users')
       .select('*')
-      .or(`auth_id.eq.${authId},email.eq.${authEmail}`)
+      .or(`auth_id.eq.${authId},email.ilike.${authEmail}`)
       .limit(1)
       .maybeSingle();
 
@@ -64,7 +64,7 @@ export async function fetchUserProfile(authUser) {
         authId: authId,
         email: data.email || authUser.email,
         name: data.name || authUser.user_metadata?.name || (authUser.email ? authUser.email.split('@')[0] : 'Usuário'),
-        role: data.role || 'loja',
+        role: data.role || authUser.user_metadata?.role || 'loja',
         storeId: data.store_id || data.storeId || ''
       };
     }
@@ -114,62 +114,5 @@ export async function rpcAdminDeleteUser(userId) {
   } catch (err) {
     console.error("Erro na exclusão de usuário via RPC:", err);
     return { success: false, error: err.message || err };
-  }
-}
-
-// Helpers de sincronização e persistência
-export async function fetchAllDataFromSupabase() {
-  if (!supabase) return null;
-
-  try {
-    const [
-      { data: stores },
-      { data: categories },
-      { data: users },
-      { data: tickets },
-      { data: alerts },
-      { data: statuses },
-      { data: priorities }
-    ] = await Promise.all([
-      supabase.from('stores').select('*'),
-      supabase.from('categories').select('*'),
-      supabase.from('app_users').select('*'),
-      supabase.from('tickets').select('*'),
-      supabase.from('alerts').select('*'),
-      supabase.from('statuses').select('*').order('order', { ascending: true }),
-      supabase.from('priorities').select('*').order('weight', { ascending: false })
-    ]);
-
-    return {
-      stores: stores || [],
-      categories: (categories || []).map(c => ({ ...c, slaHours: c.sla_hours })),
-      users: (users || []).map(u => ({ ...u, storeId: u.store_id })),
-      tickets: (tickets || []).map(t => ({
-        ...t,
-        categoryId: t.category_id,
-        storeId: t.store_id,
-        requesterId: t.requester_id,
-        assigneeId: t.assignee_id,
-        serviceNotes: t.service_notes,
-        dueDate: t.due_date,
-        attestedBy: t.attested_by,
-        attestedAt: t.attested_at,
-        createdAt: t.created_at,
-        updatedAt: t.updated_at
-      })),
-      alerts: (alerts || []).map(a => ({
-        ...a,
-        storeId: a.store_id,
-        categoryId: a.category_id,
-        dueDate: a.due_date,
-        linkedTicketId: a.linked_ticket_id,
-        createdAt: a.created_at
-      })),
-      statuses: statuses || [],
-      priorities: priorities || []
-    };
-  } catch (err) {
-    console.error('Erro ao buscar dados do Supabase:', err);
-    return null;
   }
 }

@@ -3,7 +3,7 @@ import {
   LayoutGrid, ClipboardList, Bell, Building2, Tag, Users, Plus, Search,
   X, Paperclip, Trash2, Pencil, Check, AlertTriangle,
   CalendarClock, MessageSquare, Loader2, Shield, Flag, SlidersHorizontal, BarChart3, Download, Info,
-  Cloud, RefreshCw, LogOut, Lock, Mail, Eye, EyeOff, KeyRound, UserCheck
+  LogOut, Lock, Mail, Eye, EyeOff, KeyRound
 } from "lucide-react";
 import {
   isSupabaseConfigured,
@@ -41,22 +41,6 @@ const TOKENS = `
   }
 `;
 
-const DEFAULT_STATUSES = [
-  { id: "aberta", label: "Aberta", color: "#2255C9", soft: "#E5EBFB", closed: false, order: 1 },
-  { id: "andamento", label: "Em andamento", color: "#B4650A", soft: "#FBEEDF", closed: false, order: 2 },
-  { id: "aguardando", label: "Aguardando", color: "#6D28D9", soft: "#EEE7FB", closed: false, order: 3 },
-  { id: "aguardando_atesto", label: "Aguardando atesto da loja", color: "#0E7A4A", soft: "#E4F5EC", closed: false, order: 4 },
-  { id: "nao_atestada", label: "Não atestada", color: "#D0342C", soft: "#FBE9E8", closed: false, order: 5 },
-  { id: "concluida", label: "Concluída", color: "#0E7A4A", soft: "#E4F5EC", closed: true, order: 6 },
-  { id: "cancelada", label: "Cancelada", color: "#6B7280", soft: "#EEF0F3", closed: true, order: 7 },
-];
-const DEFAULT_PRIORITIES = [
-  { id: "urgente", label: "Urgente", color: "#D0342C", soft: "#FBE9E8", weight: 4 },
-  { id: "alta", label: "Alta", color: "#B4650A", soft: "#FBEEDF", weight: 3 },
-  { id: "media", label: "Média", color: "#B08900", soft: "#FBF3D9", weight: 2 },
-  { id: "baixa", label: "Baixa", color: "#6B7280", soft: "#EEF0F3", weight: 1 },
-];
-
 const RECURRENCES = [
   { id: "none", label: "Não repete" },
   { id: "mensal", label: "Mensal" },
@@ -92,14 +76,6 @@ function lighten(hex, amount = 0.85) {
 }
 
 function uid() { return Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4); }
-// Compatibilidade: converte usuários salvos em versões antigas para o novo modelo com senha.
-function normalizeUser(u) {
-  let role = u.role === "admin" ? "admin" : "loja";
-  let storeId = u.storeId || (Array.isArray(u.storeIds) && u.storeIds.length ? u.storeIds[0] : "") || "";
-  let password = u.password || "";
-  const { storeIds, ...rest } = u;
-  return { ...rest, role, storeId, password };
-}
 function csvEscape(val) { return `"${(val ?? "").toString().replace(/"/g, '""')}"`; }
 function downloadCSV(filename, headers, rows) {
   const lines = [headers.map(csvEscape).join(";"), ...rows.map(r => r.map(csvEscape).join(";"))];
@@ -144,48 +120,6 @@ function nextSeq(tickets) {
 }
 function osCode(t) { return `OS-${t.year}-${String(t.seq).padStart(4, "0")}`; }
 function addDays(n) { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
-
-/* ------------------------------------------------------------------ */
-/* Seed data                                                           */
-/* ------------------------------------------------------------------ */
-
-function seedData() {
-  const stores = [
-    { id: uid(), name: "Loja Shopping Bosque", code: "SBQ", city: "Campo Grande", uf: "MS", address: "Av. Afonso Pena, 4909", active: true },
-    { id: uid(), name: "Loja Centro", code: "CTR", city: "Campo Grande", uf: "MS", address: "Rua 14 de Julho, 1200", active: true },
-    { id: uid(), name: "Loja Água Verde", code: "AGV", city: "Dourados", uf: "MS", address: "Av. Marcelino Pires, 850", active: true },
-  ];
-  const categories = [
-    { id: uid(), name: "Manutenção predial", icon: "🔧", color: "#0E6E5D", slaHours: 48 },
-    { id: uid(), name: "Informática / TI", icon: "💻", color: "#2255C9", slaHours: 24 },
-    { id: uid(), name: "Suprimentos", icon: "📦", color: "#B08900", slaHours: 72 },
-    { id: uid(), name: "Elétrica", icon: "⚡", color: "#B4650A", slaHours: 24 },
-    { id: uid(), name: "Hidráulica", icon: "🚿", color: "#2C7BB5", slaHours: 48 },
-    { id: uid(), name: "Segurança / Incêndio", icon: "🧯", color: "#D0342C", slaHours: 12 },
-  ];
-  const users = [
-    { id: uid(), name: "Renata Souza (Admin)", email: "admin@empresa.com", password: "admin", role: "admin", storeId: "" },
-    { id: uid(), name: "Carlos Mendes", email: "loja1@empresa.com", password: "123", role: "loja", storeId: stores[0].id },
-    { id: uid(), name: "Fabiana Lima", email: "loja2@empresa.com", password: "123", role: "loja", storeId: stores[1].id },
-    { id: uid(), name: "João Prado", email: "loja3@empresa.com", password: "123", role: "loja", storeId: stores[2].id },
-  ];
-  const year = new Date().getFullYear();
-  const mk = (over) => ({ attachments: [], comments: [], history: [], budget: "", serviceNotes: "", updatedAt: over.createdAt, attestedBy: "", attestedAt: "", ...over });
-  const tickets = [
-    mk({ id: uid(), year, seq: 1, title: "Ar-condicionado sem gelar no depósito", description: "Unidade split do depósito parou de gelar, provável falta de gás.", categoryId: categories[0].id, storeId: stores[0].id, priority: "alta", status: "andamento", requesterId: users[1].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000 * 3).toISOString(), dueDate: addDays(2), comments: [{ id: uid(), author: "Carlos Mendes", text: "Técnico já foi acionado, aguardando visita.", createdAt: new Date(Date.now() - 86400000).toISOString(), attachments: [] }] }),
-    mk({ id: uid(), year, seq: 2, title: "PDV 3 travando ao emitir cupom fiscal", description: "Sistema do PDV trava e reinicia sozinho ao finalizar venda.", categoryId: categories[1].id, storeId: stores[1].id, priority: "urgente", status: "aberta", requesterId: users[2].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000).toISOString(), dueDate: addDays(0) }),
-    mk({ id: uid(), year, seq: 3, title: "Reposição de sacolas plásticas", description: "Estoque de sacolas para o caixa está acabando.", categoryId: categories[2].id, storeId: stores[0].id, priority: "media", status: "aberta", requesterId: users[1].id, assigneeId: "", createdAt: new Date(Date.now() - 86400000 * 2).toISOString(), dueDate: addDays(5) }),
-    mk({ id: uid(), year, seq: 4, title: "Lâmpadas queimadas na vitrine", description: "3 lâmpadas de LED da vitrine frontal queimadas.", categoryId: categories[3].id, storeId: stores[2].id, priority: "baixa", status: "concluida", requesterId: users[3].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000 * 10).toISOString(), dueDate: addDays(-5) }),
-    mk({ id: uid(), year, seq: 5, title: "Vazamento no banheiro dos funcionários", description: "Registro do vaso sanitário com vazamento constante.", categoryId: categories[4].id, storeId: stores[1].id, priority: "alta", status: "aguardando", requesterId: users[2].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000 * 4).toISOString(), dueDate: addDays(1) }),
-    mk({ id: uid(), year, seq: 6, title: "Troca do extintor de incêndio - validade vencendo", description: "Extintor da área de estoque com validade próxima do vencimento.", categoryId: categories[5].id, storeId: stores[0].id, priority: "media", status: "concluida", requesterId: users[1].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000 * 20).toISOString(), dueDate: addDays(-15) }),
-  ];
-  const alerts = [
-    { id: uid(), title: "Recarga do extintor de incêndio", storeId: stores[0].id, categoryId: categories[5].id, dueDate: addDays(340), recurrence: "anual", status: "ativo", notes: "Extintor trocado/recarregado — renovar antes do vencimento.", createdAt: new Date().toISOString(), linkedTicketId: tickets[5].id },
-    { id: uid(), title: "Manutenção preventiva dos ares-condicionados", storeId: stores[1].id, categoryId: categories[0].id, dueDate: addDays(25), recurrence: "trimestral", status: "ativo", notes: "Limpeza de filtros e checagem de gás.", createdAt: new Date().toISOString(), linkedTicketId: "" },
-    { id: uid(), title: "Renovação do contrato de licença do sistema de PDV", storeId: stores[2].id, categoryId: categories[1].id, dueDate: addDays(-3), recurrence: "anual", status: "ativo", notes: "", createdAt: new Date().toISOString(), linkedTicketId: "" },
-  ];
-  return { stores, categories, users, tickets, alerts, statuses: DEFAULT_STATUSES.map(s => ({ ...s })), priorities: DEFAULT_PRIORITIES.map(p => ({ ...p })) };
-}
 
 /* ------------------------------------------------------------------ */
 /* Small UI atoms                                                      */
@@ -1676,10 +1610,13 @@ function UsersView({ data, update }) {
           setSaving(false);
           return;
         }
+        if (res.data?.id) payload.id = res.data.id;
+        if (res.data?.auth_id) payload.authId = res.data.auth_id;
       }
 
       const cleanUser = {
         id: payload.id,
+        authId: payload.authId || editing?.authId || null,
         name: payload.name,
         email: payload.email,
         role: payload.role,
@@ -2126,8 +2063,6 @@ export default function App() {
       <>
         <style>{TOKENS}</style>
         <LoginScreen
-          users={data.users}
-          stores={data.stores}
           onLogin={user => loginUser(user)}
           isCloud={isSupabaseConfigured}
         />
