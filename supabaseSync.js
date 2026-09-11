@@ -1,6 +1,25 @@
-import { supabase, isSupabaseConfigured } from './supabase.js';
+import {
+  supabase,
+  isSupabaseConfigured,
+  signInWithSupabase,
+  signOutFromSupabase,
+  getSupabaseSession,
+  onSupabaseAuthStateChange,
+  fetchUserProfile,
+  rpcAdminCreateOrUpdateUser,
+  rpcAdminDeleteUser
+} from './supabase.js';
 
-export { isSupabaseConfigured };
+export {
+  isSupabaseConfigured,
+  signInWithSupabase,
+  signOutFromSupabase,
+  getSupabaseSession,
+  onSupabaseAuthStateChange,
+  fetchUserProfile,
+  rpcAdminCreateOrUpdateUser,
+  rpcAdminDeleteUser
+};
 
 // Mapeamentos CamelCase <-> SnakeCase com Sanitização Estrita de Tipos e Foreign Keys
 export function toSnakeCase(item, type) {
@@ -9,9 +28,9 @@ export function toSnakeCase(item, type) {
   if (type === 'users') {
     return {
       id: item.id,
+      auth_id: item.authId || item.auth_id || null,
       name: item.name || '',
       email: item.email ? item.email.trim().toLowerCase() : '',
-      password: item.password?.trim() || '',
       role: item.role || 'loja',
       store_id: (item.storeId || item.store_id || '').trim() || null,
       created_at: item.created_at || item.createdAt || new Date().toISOString()
@@ -116,7 +135,7 @@ export function toCamelCase(item, type) {
   }
   if (type === 'users') {
     res.storeId = res.store_id || res.storeId || '';
-    res.password = res.password || '';
+    res.authId = res.auth_id || res.authId || null;
   }
   if (type === 'tickets') {
     res.categoryId = res.category_id || res.categoryId || '';
@@ -207,19 +226,11 @@ export async function syncKeyToSupabase(key, items) {
 
     if (formatted.length > 0) {
       let query = supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
-      if (key === 'users') query = query.select('id, password');
       const { data, error } = await query;
 
       if (error) {
         console.error(`❌ Erro ao salvar ${tableName} no Supabase:`, error);
         return { success: false, error };
-      }
-
-      if (key === 'users') {
-        const passwordsMatch = formatted.every(user =>
-          data?.some(saved => saved.id === user.id && saved.password === user.password)
-        );
-        if (!passwordsMatch) return { success: false, error: 'O Supabase não confirmou a senha informada.' };
       }
     }
 
@@ -252,8 +263,11 @@ export async function deleteUserFromSupabase(id) {
   if (!isSupabaseConfigured || !supabase) return { success: false, error: 'Supabase não configurado' };
 
   try {
-    const { error } = await supabase.from('app_users').delete().eq('id', id);
-    if (error) return { success: false, error };
+    const res = await rpcAdminDeleteUser(id);
+    if (!res.success) {
+      const { error } = await supabase.from('app_users').delete().eq('id', id);
+      if (error) return { success: false, error };
+    }
     return { success: true };
   } catch (error) {
     return { success: false, error };

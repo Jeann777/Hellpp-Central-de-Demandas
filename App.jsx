@@ -10,12 +10,14 @@ import {
   loadSupabaseData,
   syncKeyToSupabase,
   deleteUserFromSupabase,
-  subscribeToSupabase
+  subscribeToSupabase,
+  signInWithSupabase,
+  signOutFromSupabase,
+  getSupabaseSession,
+  onSupabaseAuthStateChange,
+  fetchUserProfile,
+  rpcAdminCreateOrUpdateUser
 } from "./lib/supabaseSync.js";
-
-/* ------------------------------------------------------------------ */
-/* Tokens & constants                                                  */
-/* ------------------------------------------------------------------ */
 
 const TOKENS = `
   :root{
@@ -286,91 +288,80 @@ function KpiCard({ label, value, tone, onClick }) {
 /* ------------------------------------------------------------------ */
 /* Storage hook                                                        */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 
 const EMPTY_DATA = { stores: [], categories: [], users: [], tickets: [], alerts: [], statuses: [], priorities: [] };
 
-function useStore() {
+function useStore(currentUser) {
   const [data, setData] = useState(EMPTY_DATA);
   const [ready, setReady] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const settledRef = React.useRef(false);
 
-  // Não usa dados locais: se a conexão demorar, exibe o estado online indisponível.
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (!settledRef.current) {
-        settledRef.current = true;
-        setSaveError(true);
-        setReady(true);
+  const reloadData = React.useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      setReady(true);
+      return;
+    }
+    try {
+      const supabaseData = await loadSupabaseData();
+      if (supabaseData) {
+        setData(supabaseData);
+        setSaveError(false);
       }
-    }, 8000);
-    return () => clearTimeout(t);
+    } catch (err) {
+      console.error("Erro ao recarregar dados do Supabase:", err);
+      setSaveError(true);
+    } finally {
+      setReady(true);
+    }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      // Carrega exclusivamente do Supabase para que os dados sejam os mesmos em qualquer computador.
-      if (isSupabaseConfigured) {
-        try {
-          const supabaseData = await loadSupabaseData();
-          if (!cancelled && supabaseData) {
-            let loadedData = { ...supabaseData };
-            
-            // Se a tabela de usuários estiver vazia no banco, garante o Administrador inicial
-            if (!loadedData.users || loadedData.users.length === 0) {
-              const defaultAdmin = {
-                id: "usr-admin-master",
-                name: "Administrador",
-                email: "admin@empresa.com",
-                password: "admin",
-                role: "admin",
-                storeId: ""
-              };
-              loadedData.users = [defaultAdmin];
-              syncKeyToSupabase('users', [defaultAdmin]).catch(() => {});
-            }
+      if (!isSupabaseConfigured) {
+        setReady(true);
+        return;
+      }
 
-            if (!cancelled) {
-              settledRef.current = true;
-              setData(loadedData);
-              setReady(true);
-            }
-            return;
-          }
-        } catch (err) {
-          console.error("Erro ao carregar do Supabase:", err);
+      // Quando não há usuário logado, não tenta disparar requisições protegidas por RLS
+      if (!currentUser) {
+        setData(EMPTY_DATA);
+        setReady(true);
+        return;
+      }
+
+      try {
+        const supabaseData = await loadSupabaseData();
+        if (!cancelled && supabaseData) {
+          setData(supabaseData);
+          setSaveError(false);
+          setReady(true);
+          return;
         }
+      } catch (err) {
+        console.error("Erro ao carregar do Supabase:", err);
       }
 
       if (cancelled) return;
-      settledRef.current = true;
       setSaveError(true);
       setReady(true);
     })();
 
     return () => { cancelled = true; };
-  }, []);
+  }, [currentUser?.authId, currentUser?.id, currentUser?.email]);
 
-  // 3. Inicia escuta Realtime do Supabase
+  // Inicia escuta Realtime do Supabase quando autenticado
   useEffect(() => {
-    if (!ready || !isSupabaseConfigured) return;
+    if (!currentUser || !isSupabaseConfigured) return;
 
     const unsubscribe = subscribeToSupabase(async () => {
       setIsSyncing(true);
       const fresh = await loadSupabaseData();
       if (fresh) {
-        setData(prev => ({
-          stores: fresh.stores?.length ? fresh.stores : prev.stores,
-          categories: fresh.categories?.length ? fresh.categories : prev.categories,
-          users: fresh.users?.length ? fresh.users : prev.users,
-          tickets: fresh.tickets || prev.tickets,
-          alerts: fresh.alerts || prev.alerts,
-          statuses: fresh.statuses?.length ? fresh.statuses : prev.statuses,
-          priorities: fresh.priorities?.length ? fresh.priorities : prev.priorities,
-        }));
+        setData(fresh);
       }
       setTimeout(() => setIsSyncing(false), 600);
     });
@@ -378,7 +369,7 @@ function useStore() {
     return () => {
       unsubscribe();
     };
-  }, [ready]);
+  }, [currentUser?.authId, currentUser?.id, currentUser?.email]);
 
   async function update(key, value, previousValue) {
     setData(prev => ({ ...prev, [key]: value }));
@@ -405,28 +396,28 @@ function useStore() {
     return result;
   }
 
-  return { data, ready, update, saveError, isSyncing, isCloud: isSupabaseConfigured };
+  return { data, ready, update, reloadData, saveError, isSyncing, isCloud: isSupabaseConfigured };
 }
 
 /* ------------------------------------------------------------------ */
 /* Tela de Login                                                       */
 /* ------------------------------------------------------------------ */
 
-function LoginScreen({ users, stores, onLogin, isCloud }) {
+function LoginScreen({ onLogin, isCloud }) {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     const cleanId = identifier.trim().toLowerCase();
     const cleanPass = password.trim();
 
     if (!cleanId) {
-      setError("Por favor, informe seu e-mail ou nome de usuário.");
+      setError("Por favor, informe seu e-mail de acesso.");
       return;
     }
     if (!cleanPass) {
@@ -435,33 +426,33 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
     }
 
     setLoading(true);
-    setTimeout(async () => {
-      // Procura por email (case-insensitive) ou nome
-      const user = users.find(u =>
-        (u.email && u.email.trim().toLowerCase() === cleanId) ||
-        (u.name && u.name.trim().toLowerCase() === cleanId)
-      );
+    try {
+      if (isCloud) {
+        const { data: authData, error: authErr } = await signInWithSupabase(cleanId, cleanPass);
+        if (authErr) {
+          const msg = authErr.message || "";
+          if (msg.includes("Invalid login credentials") || msg.includes("invalid_grant")) {
+            setError("E-mail ou senha incorretos. Verifique suas credenciais.");
+          } else if (msg.includes("Email not confirmed")) {
+            setError("E-mail ainda não confirmado no Supabase Auth.");
+          } else {
+            setError(`Erro ao autenticar: ${msg}`);
+          }
+          setLoading(false);
+          return;
+        }
 
-      if (!user) {
-        setError("Usuário não encontrado. Verifique o e-mail digitado.");
-        setLoading(false);
-        return;
-      }
-
-      const validPassword = user.password;
-      if (cleanPass === validPassword) {
-        onLogin(user);
+        const authUser = authData?.user;
+        const profile = await fetchUserProfile(authUser);
+        onLogin(profile);
       } else {
-        setError("Senha incorreta. Tente novamente.");
-        setLoading(false);
+        setError("Supabase não configurado.");
       }
-    }, 150);
-  }
-
-  function handleDemoLogin(u) {
-    setIdentifier(u.email || u.name);
-    setPassword("");
-    setError("");
+    } catch (err) {
+      setError("Falha ao comunicar com o servidor de autenticação.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -488,13 +479,13 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
         {/* Form */}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-300 mb-1.5">E-mail ou Usuário</label>
+            <label className="block text-xs font-semibold text-gray-300 mb-1.5">E-mail de Acesso</label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                 <Mail size={16} />
               </span>
               <input
-                type="text"
+                type="email"
                 value={identifier}
                 onChange={e => setIdentifier(e.target.value)}
                 placeholder="ex: seu-email@empresa.com"
@@ -532,68 +523,67 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full mt-2 py-3 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2 shadow-lg"
+            className="w-full mt-2 py-3 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2 shadow-lg cursor-pointer"
             style={{ backgroundColor: "var(--accent)", opacity: loading ? 0.7 : 1 }}
           >
             {loading ? <Loader2 size={18} className="animate-spin" /> : <KeyRound size={16} />}
-            {loading ? "Entrando..." : "Entrar no Sistema"}
+            {loading ? "Autenticando..." : "Entrar no Sistema"}
           </button>
         </form>
-
-        {/* Quick access helper */}
-        {users && users.length > 0 && (
-          <div className="mt-8 pt-6" style={{ borderTop: "1px solid #2B3445" }}>
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide text-center mb-3">
-              Acessos Rápidos:
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {users.slice(0, 4).map(u => (
-                <button
-                  key={u.id}
-                  type="button"
-                  onClick={() => handleDemoLogin(u)}
-                  className="flex items-center justify-between px-3 py-2 rounded-lg text-xs transition text-left hover:bg-emerald-950/30"
-                  style={{ backgroundColor: "#101622", border: "1px solid #2B3445", color: "#CBD5E1" }}
-                  title="Clique para selecionar este usuário"
-                >
-                  <div className="flex items-center gap-2 truncate">
-                    <span className="font-semibold text-white">{u.name}</span>
-                    <span className="text-[10px] text-gray-400">({u.email})</span>
-                  </div>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ backgroundColor: u.role === 'admin' ? 'rgba(14,110,93,0.3)' : 'rgba(34,85,201,0.2)', color: u.role === 'admin' ? '#34D399' : '#93C5FD' }}>
-                    {u.role === 'admin' ? 'Admin' : 'Loja'}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
-function useCurrentUser(ready, users) {
-  const [session, setSession] = useState(null);
+function useCurrentUser() {
+  const [sessionUser, setSessionUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      if (isSupabaseConfigured) {
+        try {
+          const { user } = await getSupabaseSession();
+          if (mounted && user) {
+            const profile = await fetchUserProfile(user);
+            if (mounted && profile) setSessionUser(profile);
+          }
+        } catch (e) {
+          console.warn("Erro ao recuperar sessão do Supabase:", e);
+        }
+      }
+      if (mounted) setAuthChecked(true);
+    })();
+
+    const { data: authListener } = onSupabaseAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        const profile = await fetchUserProfile(session.user);
+        if (mounted && profile) setSessionUser(profile);
+      } else if (event === "SIGNED_OUT") {
+        if (mounted) setSessionUser(null);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      authListener?.subscription?.unsubscribe?.();
+    };
+  }, []);
 
   function loginUser(user) {
-    const userObj = typeof user === 'object' ? user : { id: user };
-    setSession(userObj);
+    setSessionUser(user);
   }
 
-  function logoutUser() {
-    setSession(null);
+  async function logoutUser() {
+    if (isSupabaseConfigured) {
+      await signOutFromSupabase().catch(() => {});
+    }
+    setSessionUser(null);
   }
 
-  // Mantém o usuário atual ativo, mesclando atualizações do banco sem nunca derrubar a sessão
-  const currentUser = useMemo(() => {
-    if (!session) return null;
-    const found = users?.find(u => u.id === session.id || (u.email && session.email && u.email.toLowerCase() === session.email.toLowerCase()));
-    if (found) return found;
-    return session;
-  }, [users, session]);
-
-  return { currentUser, loginUser, logoutUser };
+  return { currentUser: sessionUser, authChecked, loginUser, logoutUser };
 }
 
 /* ------------------------------------------------------------------ */
@@ -1657,14 +1647,18 @@ function CategoryFormModal({ initial, onCancel, onSave }) {
 function UsersView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+
   async function save(f) {
     const payload = {
+      id: editing?.id || uid(),
       name: f.name.trim(),
       email: f.email.trim().toLowerCase(),
-      password: f.password.trim(),
+      password: f.password ? f.password.trim() : "",
       role: f.role,
       storeId: f.role === "admin" ? "" : (f.storeId || "")
     };
+
     const duplicate = data.users.find(user =>
       user.email?.trim().toLowerCase() === payload.email && user.id !== editing?.id
     );
@@ -1672,19 +1666,51 @@ function UsersView({ data, update }) {
       alert("Já existe um usuário cadastrado com este e-mail.");
       return;
     }
-    const users = editing
-      ? data.users.map(u => u.id === editing.id ? { ...u, ...payload } : u)
-      : [...data.users, { id: uid(), ...payload }];
-    const result = await update("users", users, data.users);
-    if (!result.success) {
-      alert("Não foi possível salvar o usuário no Supabase. Verifique a conexão e tente novamente.");
-      return;
+
+    setSaving(true);
+    try {
+      if (isSupabaseConfigured) {
+        const res = await rpcAdminCreateOrUpdateUser(payload);
+        if (!res.success) {
+          alert(`Erro ao salvar usuário no Supabase: ${res.error}`);
+          setSaving(false);
+          return;
+        }
+      }
+
+      const cleanUser = {
+        id: payload.id,
+        name: payload.name,
+        email: payload.email,
+        role: payload.role,
+        storeId: payload.storeId
+      };
+
+      const users = editing
+        ? data.users.map(u => u.id === editing.id ? { ...u, ...cleanUser } : u)
+        : [...data.users, cleanUser];
+
+      const result = await update("users", users, data.users);
+      if (!result.success) {
+        alert("Não foi possível sincronizar o usuário na tela. Recarregue a página.");
+      }
+      setShowForm(false);
+      setEditing(null);
+    } catch (err) {
+      alert("Erro ao processar requisição de usuário.");
+    } finally {
+      setSaving(false);
     }
-    setShowForm(false); setEditing(null);
   }
+
   async function remove(id) {
     const u = data.users.find(x => x.id === id);
-    if (u?.role === "admin" && data.users.filter(x => x.role === "admin").length <= 1) { alert("Deve existir ao menos um usuário administrador."); return; }
+    if (u?.role === "admin" && data.users.filter(x => x.role === "admin").length <= 1) {
+      alert("Deve existir ao menos um usuário administrador.");
+      return;
+    }
+    if (!confirm(`Deseja realmente excluir o usuário "${u?.name || id}"?`)) return;
+
     const deletion = await deleteUserFromSupabase(id);
     if (!deletion.success) {
       alert("Não foi possível excluir o usuário no Supabase. Tente novamente.");
@@ -1693,6 +1719,7 @@ function UsersView({ data, update }) {
     const result = await update("users", data.users.filter(u => u.id !== id));
     if (!result.success) alert("O usuário foi excluído no Supabase, mas a tela não pôde ser atualizada. Recarregue a página.");
   }
+
   return (
     <>
       <div className="flex items-center justify-between mb-4">
@@ -1702,30 +1729,43 @@ function UsersView({ data, update }) {
       <div className="flex flex-col gap-2">
         {data.users.map(u => (
           <div key={u.id} className="rounded-xl p-3.5 flex items-center gap-3" style={{ backgroundColor: "var(--surface)", border: "1px solid var(--border)" }}>
-            <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent-ink)" }}>{u.name.split(" ").map(n => n[0]).slice(0, 2).join("")}</div>
+            <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent-ink)" }}>
+              {u.name.split(" ").map(n => n[0]).slice(0, 2).join("")}
+            </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <p className="text-sm font-semibold truncate" style={{ color: "var(--ink)" }}>{u.name}</p>
                 <Pill label={ROLES.find(r => r.id === u.role)?.label} color="var(--accent)" soft="var(--accent-soft)" />
               </div>
               <p className="text-xs truncate mt-0.5" style={{ color: "var(--faint)" }}>
-                <strong>Login:</strong> {u.email} · <strong>Senha:</strong> <span className="font-mono text-gray-700 bg-gray-100 px-1 py-0.5 rounded">{u.password || "Não definida"}</span> · {u.role === "admin" ? "Acesso total" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
+                <strong>Login:</strong> {u.email} · {u.role === "admin" ? "Acesso total (Administrador)" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
               </p>
             </div>
-            <div className="flex gap-1"><IconBtn onClick={() => { setEditing(u); setShowForm(true); }} title="Editar dados e senha"><Pencil size={15} /></IconBtn><IconBtn onClick={() => remove(u.id)} title="Excluir usuário"><Trash2 size={15} /></IconBtn></div>
+            <div className="flex gap-1">
+              <IconBtn onClick={() => { setEditing(u); setShowForm(true); }} title="Editar dados do usuário"><Pencil size={15} /></IconBtn>
+              <IconBtn onClick={() => remove(u.id)} title="Excluir usuário"><Trash2 size={15} /></IconBtn>
+            </div>
           </div>
         ))}
       </div>
-      {showForm && <UserFormModal initial={editing} stores={data.stores} onCancel={() => { setShowForm(false); setEditing(null); }} onSave={save} />}
+      {showForm && (
+        <UserFormModal
+          initial={editing}
+          stores={data.stores}
+          saving={saving}
+          onCancel={() => { setShowForm(false); setEditing(null); }}
+          onSave={save}
+        />
+      )}
     </>
   );
 }
 
-function UserFormModal({ initial, stores, onCancel, onSave }) {
+function UserFormModal({ initial, stores, saving, onCancel, onSave }) {
   const [f, setF] = useState(initial ? {
     name: initial.name,
     email: initial.email,
-    password: initial.password || "",
+    password: "",
     role: initial.role,
     storeId: initial.storeId || ""
   } : {
@@ -1743,13 +1783,16 @@ function UserFormModal({ initial, stores, onCancel, onSave }) {
       <div className="flex flex-col gap-3">
         <Field label="Nome completo"><TextInput value={f.name} onChange={e => set("name", e.target.value)} placeholder="Ex: Carlos Mendes" /></Field>
         <Field label="E-mail de acesso (Login)"><TextInput type="email" value={f.email} onChange={e => set("email", e.target.value)} placeholder="ex: loja1@empresa.com" /></Field>
-        <Field label="Senha de acesso" hint="Senha usada por este usuário para entrar na Central de Demandas.">
+        <Field
+          label="Senha de acesso"
+          hint={initial ? "Deixe em branco para manter a senha atual inalterada." : "Defina a senha inicial de acesso para o usuário."}
+        >
           <div className="relative">
             <TextInput
               type={showPass ? "text" : "password"}
               value={f.password}
               onChange={e => set("password", e.target.value)}
-              placeholder="Digite a senha"
+              placeholder={initial ? "Nova senha (opcional)" : "Digite a senha inicial"}
             />
             <button
               type="button"
@@ -1775,7 +1818,12 @@ function UserFormModal({ initial, stores, onCancel, onSave }) {
         )}
         <div className="flex justify-end gap-2 mt-2">
           <Button variant="outline" onClick={onCancel}>Cancelar</Button>
-          <Button onClick={() => onSave(f)} disabled={!f.name.trim() || !f.email.trim() || !f.password?.trim() || (f.role === "loja" && !f.storeId)}>Salvar</Button>
+          <Button
+            onClick={() => onSave(f)}
+            disabled={saving || !f.name.trim() || !f.email.trim() || (!initial && !f.password?.trim()) || (f.role === "loja" && !f.storeId)}
+          >
+            {saving ? "Salvando..." : "Salvar"}
+          </Button>
         </div>
       </div>
     </Modal>
@@ -2022,8 +2070,8 @@ function AdminView({ data, update }) {
 /* ------------------------------------------------------------------ */
 
 export default function App() {
-  const { data, ready, update } = useStore();
-  const { currentUser, loginUser, logoutUser } = useCurrentUser(ready, data.users);
+  const { currentUser, loginUser, logoutUser, authChecked } = useCurrentUser();
+  const { data, ready, update } = useStore(currentUser);
   const [view, setView] = useState("dashboard");
   const [ticketsNav, setTicketsNav] = useState({ filters: null, openId: null });
   const [loginNotice, setLoginNotice] = useState(null);
@@ -2063,7 +2111,7 @@ export default function App() {
   }
   function goToAlerts() { setView("alerts"); }
 
-  if (!ready) {
+  if (!authChecked || !ready) {
     return (
       <div className="w-full h-screen flex items-center justify-center" style={{ backgroundColor: "var(--bg)" }}>
         <style>{TOKENS}</style>
