@@ -318,7 +318,7 @@ function useStore(currentUser) {
     const itemsToPersist = key === "users" && previousValue
       ? value.filter(user => {
           const previous = previousValue.find(item => item.id === user.id);
-          return !previous || previous.name !== user.name || previous.email !== user.email || previous.password !== user.password || previous.role !== user.role || previous.storeId !== user.storeId;
+          return !previous || previous.name !== user.name || previous.email !== user.email || previous.role !== user.role || previous.storeId !== user.storeId;
         })
       : value;
     const result = await syncKeyToSupabase(key, itemsToPersist);

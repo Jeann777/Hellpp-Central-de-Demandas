@@ -173,6 +173,8 @@ const TABLE_MAP = {
 };
 
 // Carrega todos os dados do Supabase
+// Tolerante a falhas parciais: se uma tabela falhar individualmente (ex: RLS bloqueou),
+// retorna os dados das demais em vez de descartar tudo e exibir app vazio.
 export async function loadSupabaseData() {
   if (!isSupabaseConfigured || !supabase) return null;
 
@@ -195,22 +197,30 @@ export async function loadSupabaseData() {
       supabase.from('priorities').select('*').order('weight', { ascending: false })
     ]);
 
-    if (e1 || e2 || e3 || e4 || e5 || e6 || e7) {
-      console.warn('Erro ao carregar dados do Supabase:', { e1, e2, e3, e4, e5, e6, e7 });
+    // Log de erros individuais sem bloquear o restante dos dados
+    const errors = { e1, e2, e3, e4, e5, e6, e7 };
+    const hasErrors = Object.values(errors).some(Boolean);
+    if (hasErrors) {
+      console.warn('⚠️ Supabase: erros parciais ao carregar dados:', errors);
+    }
+
+    // Se erros críticos (auth/permissão) que impedem qualquer dado útil
+    if ((e1 && e2 && e3 && e4 && e5 && e6 && e7)) {
+      console.error('❌ Supabase: falha total ao carregar dados. Verifique RLS e variáveis de ambiente.');
       return null;
     }
 
     return {
-      stores: (stores || []).map(s => toCamelCase(s, 'stores')),
+      stores:     (stores     || []).map(s => toCamelCase(s, 'stores')),
       categories: (categories || []).map(c => toCamelCase(c, 'categories')),
-      users: (users || []).map(u => toCamelCase(u, 'users')),
-      tickets: (tickets || []).map(t => toCamelCase(t, 'tickets')),
-      alerts: (alerts || []).map(a => toCamelCase(a, 'alerts')),
-      statuses: (statuses || []).map(s => toCamelCase(s, 'statuses')),
+      users:      (users      || []).map(u => toCamelCase(u, 'users')),
+      tickets:    (tickets    || []).map(t => toCamelCase(t, 'tickets')),
+      alerts:     (alerts     || []).map(a => toCamelCase(a, 'alerts')),
+      statuses:   (statuses   || []).map(s => toCamelCase(s, 'statuses')),
       priorities: (priorities || []).map(p => toCamelCase(p, 'priorities'))
     };
   } catch (err) {
-    console.error('Falha na comunicação com Supabase:', err);
+    console.error('❌ Falha crítica na comunicação com Supabase:', err);
     return null;
   }
 }

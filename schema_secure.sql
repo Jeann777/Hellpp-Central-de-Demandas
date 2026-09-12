@@ -4,7 +4,8 @@
 -- ====================================================================
 
 -- 1. Habilitar extensões necessárias para criptografia de senhas
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- IMPORTANTE: No Supabase Cloud, pgcrypto fica no schema 'extensions'
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
 
 -- 2. Garantir integridade da tabela de Lojas (stores)
 CREATE TABLE IF NOT EXISTS public.stores (
@@ -60,7 +61,10 @@ CREATE TABLE IF NOT EXISTS public.app_users (
 
 -- Migração da tabela app_users caso já exista no banco:
 ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS auth_id UUID;
-ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'loja';
+-- Adiciona role com DEFAULT antes de aplicar NOT NULL para evitar erros em tabelas existentes com dados
+ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'loja';
+UPDATE public.app_users SET role = 'loja' WHERE role IS NULL;
+ALTER TABLE public.app_users ALTER COLUMN role SET NOT NULL;
 ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS store_id TEXT REFERENCES public.stores(id) ON DELETE SET NULL;
 ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
 
@@ -151,6 +155,8 @@ AS $$
 $$;
 
 -- Função Segura para o Administrador cadastrar/atualizar usuários com senha no Supabase Auth
+-- CORREÇÃO: Inclui inserção em auth.identities (obrigatório para login email/senha)
+--           e usa extensions.crypt() para compatibilidade com Supabase Cloud
 CREATE OR REPLACE FUNCTION public.admin_create_or_update_user(
   p_id TEXT,
   p_email TEXT,
@@ -186,7 +192,7 @@ BEGIN
     -- Atualiza dados de autenticação e senha (se fornecida)
     IF p_password IS NOT NULL AND btrim(p_password) <> '' THEN
       UPDATE auth.users
-      SET encrypted_password = crypt(p_password, gen_salt('bf')),
+      SET encrypted_password = extensions.crypt(p_password, extensions.gen_salt('bf', 10)),
           raw_user_meta_data = jsonb_build_object('name', p_name, 'role', p_role, 'store_id', p_store_id),
           updated_at = now()
       WHERE id = v_auth_id;
@@ -203,6 +209,8 @@ BEGIN
     END IF;
 
     v_auth_id := gen_random_uuid();
+
+    -- Inserção no auth.users
     INSERT INTO auth.users (
       instance_id,
       id,
@@ -223,7 +231,7 @@ BEGIN
       'authenticated',
       'authenticated',
       v_clean_email,
-      crypt(p_password, gen_salt('bf')),
+      extensions.crypt(p_password, extensions.gen_salt('bf', 10)),
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
       jsonb_build_object('name', p_name, 'role', p_role, 'store_id', p_store_id),
@@ -231,6 +239,27 @@ BEGIN
       now(),
       '',
       ''
+    );
+
+    -- CRÍTICO: Inserção em auth.identities (sem isso o login por email nunca funciona)
+    INSERT INTO auth.identities (
+      id,
+      user_id,
+      identity_data,
+      provider,
+      provider_id,
+      last_sign_in_at,
+      created_at,
+      updated_at
+    ) VALUES (
+      v_auth_id,
+      v_auth_id,
+      jsonb_build_object('sub', v_auth_id::text, 'email', v_clean_email),
+      'email',
+      v_auth_id::text,
+      NULL,
+      now(),
+      now()
     );
   END IF;
 
@@ -247,9 +276,9 @@ BEGIN
     NULLIF(p_store_id, '')
   )
   ON CONFLICT (email) DO UPDATE SET
-    auth_id = EXCLUDED.auth_id,
-    name = EXCLUDED.name,
-    role = EXCLUDED.role,
+    auth_id  = EXCLUDED.auth_id,
+    name     = EXCLUDED.name,
+    role     = EXCLUDED.role,
     store_id = EXCLUDED.store_id;
 
   RETURN jsonb_build_object('success', true, 'id', v_user_id, 'auth_id', v_auth_id);
