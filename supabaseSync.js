@@ -1,6 +1,25 @@
-import { supabase, isSupabaseConfigured } from './supabase.js';
+import {
+  supabase,
+  isSupabaseConfigured,
+  signInWithSupabase,
+  signOutFromSupabase,
+  getSupabaseSession,
+  onSupabaseAuthStateChange,
+  fetchUserProfile,
+  rpcAdminCreateOrUpdateUser,
+  rpcAdminDeleteUser
+} from './supabase.js';
 
-export { isSupabaseConfigured };
+export {
+  isSupabaseConfigured,
+  signInWithSupabase,
+  signOutFromSupabase,
+  getSupabaseSession,
+  onSupabaseAuthStateChange,
+  fetchUserProfile,
+  rpcAdminCreateOrUpdateUser,
+  rpcAdminDeleteUser
+};
 
 // Mapeamentos CamelCase <-> SnakeCase com Sanitização Estrita de Tipos e Foreign Keys
 export function toSnakeCase(item, type) {
@@ -9,9 +28,9 @@ export function toSnakeCase(item, type) {
   if (type === 'users') {
     return {
       id: item.id,
+      auth_id: item.authId || item.auth_id || null,
       name: item.name || '',
       email: item.email ? item.email.trim().toLowerCase() : '',
-      password: item.password?.trim() || '',
       role: item.role || 'loja',
       store_id: (item.storeId || item.store_id || '').trim() || null,
       created_at: item.created_at || item.createdAt || new Date().toISOString()
@@ -116,7 +135,7 @@ export function toCamelCase(item, type) {
   }
   if (type === 'users') {
     res.storeId = res.store_id || res.storeId || '';
-    res.password = res.password || '';
+    res.authId = res.auth_id || res.authId || null;
   }
   if (type === 'tickets') {
     res.categoryId = res.category_id || res.categoryId || '';
@@ -154,6 +173,8 @@ const TABLE_MAP = {
 };
 
 // Carrega todos os dados do Supabase
+// Tolerante a falhas parciais: se uma tabela falhar individualmente (ex: RLS bloqueou),
+// retorna os dados das demais em vez de descartar tudo e exibir app vazio.
 export async function loadSupabaseData() {
   if (!isSupabaseConfigured || !supabase) return null;
 
@@ -176,22 +197,30 @@ export async function loadSupabaseData() {
       supabase.from('priorities').select('*').order('weight', { ascending: false })
     ]);
 
-    if (e1 || e2 || e3 || e4 || e5 || e6 || e7) {
-      console.warn('Erro ao carregar dados do Supabase:', { e1, e2, e3, e4, e5, e6, e7 });
+    // Log de erros individuais sem bloquear o restante dos dados
+    const errors = { e1, e2, e3, e4, e5, e6, e7 };
+    const hasErrors = Object.values(errors).some(Boolean);
+    if (hasErrors) {
+      console.warn('⚠️ Supabase: erros parciais ao carregar dados:', errors);
+    }
+
+    // Se erros críticos (auth/permissão) que impedem qualquer dado útil
+    if ((e1 && e2 && e3 && e4 && e5 && e6 && e7)) {
+      console.error('❌ Supabase: falha total ao carregar dados. Verifique RLS e variáveis de ambiente.');
       return null;
     }
 
     return {
-      stores: (stores || []).map(s => toCamelCase(s, 'stores')),
+      stores:     (stores     || []).map(s => toCamelCase(s, 'stores')),
       categories: (categories || []).map(c => toCamelCase(c, 'categories')),
-      users: (users || []).map(u => toCamelCase(u, 'users')),
-      tickets: (tickets || []).map(t => toCamelCase(t, 'tickets')),
-      alerts: (alerts || []).map(a => toCamelCase(a, 'alerts')),
-      statuses: (statuses || []).map(s => toCamelCase(s, 'statuses')),
+      users:      (users      || []).map(u => toCamelCase(u, 'users')),
+      tickets:    (tickets    || []).map(t => toCamelCase(t, 'tickets')),
+      alerts:     (alerts     || []).map(a => toCamelCase(a, 'alerts')),
+      statuses:   (statuses   || []).map(s => toCamelCase(s, 'statuses')),
       priorities: (priorities || []).map(p => toCamelCase(p, 'priorities'))
     };
   } catch (err) {
-    console.error('Falha na comunicação com Supabase:', err);
+    console.error('❌ Falha crítica na comunicação com Supabase:', err);
     return null;
   }
 }
@@ -199,6 +228,10 @@ export async function loadSupabaseData() {
 // Salva dados no Supabase quando alterados
 export async function syncKeyToSupabase(key, items) {
   if (!isSupabaseConfigured || !supabase) return { success: false, error: 'Supabase não configurado' };
+  
+  // Usuários são gerenciados exclusivamente via RPC seguro (admin_create_or_update_user e admin_delete_user)
+  if (key === 'users') return { success: true };
+
   const tableName = TABLE_MAP[key];
   if (!tableName || !Array.isArray(items)) return { success: false, error: 'Tabela inválida ou dados não são array' };
 
@@ -207,25 +240,13 @@ export async function syncKeyToSupabase(key, items) {
 
     if (formatted.length > 0) {
       let query = supabase.from(tableName).upsert(formatted, { onConflict: 'id' });
-      if (key === 'users') query = query.select('id, password');
       const { data, error } = await query;
 
       if (error) {
         console.error(`❌ Erro ao salvar ${tableName} no Supabase:`, error);
         return { success: false, error };
       }
-
-      if (key === 'users') {
-        const passwordsMatch = formatted.every(user =>
-          data?.some(saved => saved.id === user.id && saved.password === user.password)
-        );
-        if (!passwordsMatch) return { success: false, error: 'O Supabase não confirmou a senha informada.' };
-      }
     }
-
-    // Usuários são gravados individualmente. Nunca removemos usuários que não
-    // estejam na cópia desta tela, pois ela pode estar desatualizada.
-    if (key === 'users') return { success: true };
 
     // Exclusão de itens removidos (após o upsert para não quebrar)
     try {
@@ -252,38 +273,16 @@ export async function deleteUserFromSupabase(id) {
   if (!isSupabaseConfigured || !supabase) return { success: false, error: 'Supabase não configurado' };
 
   try {
-    const { error } = await supabase.from('app_users').delete().eq('id', id);
-    if (error) return { success: false, error };
+    const res = await rpcAdminDeleteUser(id);
+    if (!res.success) {
+      const { error } = await supabase.from('app_users').delete().eq('id', id);
+      if (error) return { success: false, error };
+    }
     return { success: true };
   } catch (error) {
     return { success: false, error };
   }
 }
-
-// Inicializa dados no Supabase se as tabelas principais estiverem vazias
-export async function seedSupabaseIfEmpty(seed) {
-  if (!isSupabaseConfigured || !supabase || !seed) return;
-
-  try {
-    const { count: usersCount } = await supabase.from('app_users').select('*', { count: 'exact', head: true });
-    if (!usersCount || usersCount === 0) {
-      console.log('🌱 Inicializando usuários padrão no Supabase...');
-      if (seed.users?.length) await syncKeyToSupabase('users', seed.users);
-    }
-
-    const { count: storesCount } = await supabase.from('stores').select('*', { count: 'exact', head: true });
-    if (!storesCount || storesCount === 0) {
-      console.log('🌱 Inicializando lojas e categorias no Supabase...');
-      if (seed.stores?.length) await syncKeyToSupabase('stores', seed.stores);
-      if (seed.categories?.length) await syncKeyToSupabase('categories', seed.categories);
-      if (seed.tickets?.length) await syncKeyToSupabase('tickets', seed.tickets);
-      if (seed.alerts?.length) await syncKeyToSupabase('alerts', seed.alerts);
-    }
-  } catch (err) {
-    console.error('Erro ao verificar/popular seed inicial:', err);
-  }
-}
-
 
 // Inicia escuta Realtime
 export function subscribeToSupabase(onUpdate) {

@@ -3,61 +3,23 @@ import {
   LayoutGrid, ClipboardList, Bell, Building2, Tag, Users, Plus, Search,
   X, Paperclip, Trash2, Pencil, Check, AlertTriangle,
   CalendarClock, MessageSquare, Loader2, Shield, Flag, SlidersHorizontal, BarChart3, Download, Info,
-  Cloud, RefreshCw, LogOut, Lock, Mail, Eye, EyeOff, KeyRound, UserCheck
+  LogOut, Lock, Mail, Eye, EyeOff, KeyRound
 } from "lucide-react";
 import {
   isSupabaseConfigured,
   loadSupabaseData,
   syncKeyToSupabase,
-  seedSupabaseIfEmpty,
-  subscribeToSupabase
-} from "./src/lib/supabaseSync.js";
+  deleteUserFromSupabase,
+  subscribeToSupabase,
+  signInWithSupabase,
+  signOutFromSupabase,
+  getSupabaseSession,
+  onSupabaseAuthStateChange,
+  fetchUserProfile,
+  rpcAdminCreateOrUpdateUser
+} from "./lib/supabaseSync.js";
 
-/* ------------------------------------------------------------------ */
-/* Tokens & constants                                                  */
-/* ------------------------------------------------------------------ */
-
-const TOKENS = `
-  :root{
-    --bg:#F3F4F7;
-    --surface:#FFFFFF;
-    --ink:#161B26;
-    --muted:#6B7280;
-    --faint:#9CA3AF;
-    --border:#E4E6EB;
-    --accent:#0E6E5D;
-    --accent-ink:#0B584A;
-    --accent-soft:#E4F2EF;
-    --danger:#D0342C;
-    --danger-soft:#FBE9E8;
-    --warn:#B4650A;
-    --warn-soft:#FBEEDF;
-    --ok:#0E7A4A;
-    --ok-soft:#E4F5EC;
-    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, monospace;
-  }
-`;
-
-const DATA_KEY = "od_app_data_v2";
-const CURRENT_USER_KEY = "od_current_user_id";
-const LAST_LOGIN_KEY = "od_last_login_map";
-
-const DEFAULT_STATUSES = [
-  { id: "aberta", label: "Aberta", color: "#2255C9", soft: "#E5EBFB", closed: false, order: 1 },
-  { id: "andamento", label: "Em andamento", color: "#B4650A", soft: "#FBEEDF", closed: false, order: 2 },
-  { id: "aguardando", label: "Aguardando", color: "#6D28D9", soft: "#EEE7FB", closed: false, order: 3 },
-  { id: "aguardando_atesto", label: "Aguardando atesto da loja", color: "#0E7A4A", soft: "#E4F5EC", closed: false, order: 4 },
-  { id: "nao_atestada", label: "Não atestada", color: "#D0342C", soft: "#FBE9E8", closed: false, order: 5 },
-  { id: "concluida", label: "Concluída", color: "#0E7A4A", soft: "#E4F5EC", closed: true, order: 6 },
-  { id: "cancelada", label: "Cancelada", color: "#6B7280", soft: "#EEF0F3", closed: true, order: 7 },
-];
-const DEFAULT_PRIORITIES = [
-  { id: "urgente", label: "Urgente", color: "#D0342C", soft: "#FBE9E8", weight: 4 },
-  { id: "alta", label: "Alta", color: "#B4650A", soft: "#FBEEDF", weight: 3 },
-  { id: "media", label: "Média", color: "#B08900", soft: "#FBF3D9", weight: 2 },
-  { id: "baixa", label: "Baixa", color: "#6B7280", soft: "#EEF0F3", weight: 1 },
-];
+/* Design tokens definidos em index.css — não duplicar aqui */
 
 const RECURRENCES = [
   { id: "none", label: "Não repete" },
@@ -94,14 +56,6 @@ function lighten(hex, amount = 0.85) {
 }
 
 function uid() { return Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4); }
-// Compatibilidade: converte usuários salvos em versões antigas para o novo modelo com senha.
-function normalizeUser(u) {
-  let role = u.role === "admin" ? "admin" : "loja";
-  let storeId = u.storeId || (Array.isArray(u.storeIds) && u.storeIds.length ? u.storeIds[0] : "") || "";
-  let password = u.password || (role === "admin" ? "admin" : "123");
-  const { storeIds, ...rest } = u;
-  return { ...rest, role, storeId, password };
-}
 function csvEscape(val) { return `"${(val ?? "").toString().replace(/"/g, '""')}"`; }
 function downloadCSV(filename, headers, rows) {
   const lines = [headers.map(csvEscape).join(";"), ...rows.map(r => r.map(csvEscape).join(";"))];
@@ -146,48 +100,6 @@ function nextSeq(tickets) {
 }
 function osCode(t) { return `OS-${t.year}-${String(t.seq).padStart(4, "0")}`; }
 function addDays(n) { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
-
-/* ------------------------------------------------------------------ */
-/* Seed data                                                           */
-/* ------------------------------------------------------------------ */
-
-function seedData() {
-  const stores = [
-    { id: uid(), name: "Loja Shopping Bosque", code: "SBQ", city: "Campo Grande", uf: "MS", address: "Av. Afonso Pena, 4909", active: true },
-    { id: uid(), name: "Loja Centro", code: "CTR", city: "Campo Grande", uf: "MS", address: "Rua 14 de Julho, 1200", active: true },
-    { id: uid(), name: "Loja Água Verde", code: "AGV", city: "Dourados", uf: "MS", address: "Av. Marcelino Pires, 850", active: true },
-  ];
-  const categories = [
-    { id: uid(), name: "Manutenção predial", icon: "🔧", color: "#0E6E5D", slaHours: 48 },
-    { id: uid(), name: "Informática / TI", icon: "💻", color: "#2255C9", slaHours: 24 },
-    { id: uid(), name: "Suprimentos", icon: "📦", color: "#B08900", slaHours: 72 },
-    { id: uid(), name: "Elétrica", icon: "⚡", color: "#B4650A", slaHours: 24 },
-    { id: uid(), name: "Hidráulica", icon: "🚿", color: "#2C7BB5", slaHours: 48 },
-    { id: uid(), name: "Segurança / Incêndio", icon: "🧯", color: "#D0342C", slaHours: 12 },
-  ];
-  const users = [
-    { id: uid(), name: "Renata Souza (Admin)", email: "admin@empresa.com", password: "admin", role: "admin", storeId: "" },
-    { id: uid(), name: "Carlos Mendes", email: "loja1@empresa.com", password: "123", role: "loja", storeId: stores[0].id },
-    { id: uid(), name: "Fabiana Lima", email: "loja2@empresa.com", password: "123", role: "loja", storeId: stores[1].id },
-    { id: uid(), name: "João Prado", email: "loja3@empresa.com", password: "123", role: "loja", storeId: stores[2].id },
-  ];
-  const year = new Date().getFullYear();
-  const mk = (over) => ({ attachments: [], comments: [], history: [], budget: "", serviceNotes: "", updatedAt: over.createdAt, attestedBy: "", attestedAt: "", ...over });
-  const tickets = [
-    mk({ id: uid(), year, seq: 1, title: "Ar-condicionado sem gelar no depósito", description: "Unidade split do depósito parou de gelar, provável falta de gás.", categoryId: categories[0].id, storeId: stores[0].id, priority: "alta", status: "andamento", requesterId: users[1].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000 * 3).toISOString(), dueDate: addDays(2), comments: [{ id: uid(), author: "Carlos Mendes", text: "Técnico já foi acionado, aguardando visita.", createdAt: new Date(Date.now() - 86400000).toISOString(), attachments: [] }] }),
-    mk({ id: uid(), year, seq: 2, title: "PDV 3 travando ao emitir cupom fiscal", description: "Sistema do PDV trava e reinicia sozinho ao finalizar venda.", categoryId: categories[1].id, storeId: stores[1].id, priority: "urgente", status: "aberta", requesterId: users[2].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000).toISOString(), dueDate: addDays(0) }),
-    mk({ id: uid(), year, seq: 3, title: "Reposição de sacolas plásticas", description: "Estoque de sacolas para o caixa está acabando.", categoryId: categories[2].id, storeId: stores[0].id, priority: "media", status: "aberta", requesterId: users[1].id, assigneeId: "", createdAt: new Date(Date.now() - 86400000 * 2).toISOString(), dueDate: addDays(5) }),
-    mk({ id: uid(), year, seq: 4, title: "Lâmpadas queimadas na vitrine", description: "3 lâmpadas de LED da vitrine frontal queimadas.", categoryId: categories[3].id, storeId: stores[2].id, priority: "baixa", status: "concluida", requesterId: users[3].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000 * 10).toISOString(), dueDate: addDays(-5) }),
-    mk({ id: uid(), year, seq: 5, title: "Vazamento no banheiro dos funcionários", description: "Registro do vaso sanitário com vazamento constante.", categoryId: categories[4].id, storeId: stores[1].id, priority: "alta", status: "aguardando", requesterId: users[2].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000 * 4).toISOString(), dueDate: addDays(1) }),
-    mk({ id: uid(), year, seq: 6, title: "Troca do extintor de incêndio - validade vencendo", description: "Extintor da área de estoque com validade próxima do vencimento.", categoryId: categories[5].id, storeId: stores[0].id, priority: "media", status: "concluida", requesterId: users[1].id, assigneeId: users[0].id, createdAt: new Date(Date.now() - 86400000 * 20).toISOString(), dueDate: addDays(-15) }),
-  ];
-  const alerts = [
-    { id: uid(), title: "Recarga do extintor de incêndio", storeId: stores[0].id, categoryId: categories[5].id, dueDate: addDays(340), recurrence: "anual", status: "ativo", notes: "Extintor trocado/recarregado — renovar antes do vencimento.", createdAt: new Date().toISOString(), linkedTicketId: tickets[5].id },
-    { id: uid(), title: "Manutenção preventiva dos ares-condicionados", storeId: stores[1].id, categoryId: categories[0].id, dueDate: addDays(25), recurrence: "trimestral", status: "ativo", notes: "Limpeza de filtros e checagem de gás.", createdAt: new Date().toISOString(), linkedTicketId: "" },
-    { id: uid(), title: "Renovação do contrato de licença do sistema de PDV", storeId: stores[2].id, categoryId: categories[1].id, dueDate: addDays(-3), recurrence: "anual", status: "ativo", notes: "", createdAt: new Date().toISOString(), linkedTicketId: "" },
-  ];
-  return { stores, categories, users, tickets, alerts, statuses: DEFAULT_STATUSES.map(s => ({ ...s })), priorities: DEFAULT_PRIORITIES.map(p => ({ ...p })) };
-}
 
 /* ------------------------------------------------------------------ */
 /* Small UI atoms                                                      */
@@ -290,100 +202,74 @@ function KpiCard({ label, value, tone, onClick }) {
 /* ------------------------------------------------------------------ */
 /* Storage hook                                                        */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
 
 const EMPTY_DATA = { stores: [], categories: [], users: [], tickets: [], alerts: [], statuses: [], priorities: [] };
 
-function useStore() {
+function useStore(currentUser) {
   const [data, setData] = useState(EMPTY_DATA);
   const [ready, setReady] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const settledRef = React.useRef(false);
 
-  // Rede de segurança: se por qualquer motivo demorar mais de 8s, libera com seedData
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (!settledRef.current) {
-        settledRef.current = true;
-        setData(seedData());
-        setReady(true);
+  const reloadData = React.useCallback(async () => {
+    if (!isSupabaseConfigured) {
+      setReady(true);
+      return;
+    }
+    try {
+      const supabaseData = await loadSupabaseData();
+      if (supabaseData) {
+        setData(supabaseData);
+        setSaveError(false);
       }
-    }, 8000);
-    return () => clearTimeout(t);
+    } catch (err) {
+      console.error("Erro ao recarregar dados do Supabase:", err);
+      setSaveError(true);
+    } finally {
+      setReady(true);
+    }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      // 1. Tenta carregar do Supabase se configurado
-      if (isSupabaseConfigured) {
-        try {
-          const supabaseData = await loadSupabaseData();
-          if (!cancelled && supabaseData) {
-            const hasStores = supabaseData.stores && supabaseData.stores.length > 0;
-            if (!hasStores) {
-              const seed = seedData();
-              await seedSupabaseIfEmpty(seed);
-              if (!cancelled) {
-                settledRef.current = true;
-                setData(seed);
-                setReady(true);
-              }
-            } else {
-              if (!cancelled) {
-                settledRef.current = true;
-                setData(supabaseData);
-                setReady(true);
-              }
-            }
-            return;
-          }
-        } catch (err) {
-          console.error("Erro ao carregar do Supabase:", err);
-        }
-      }
-
-      if (cancelled) return;
-
-      // 2. Fallback para storage local
-      let parsed = null;
-      try {
-        const r = await window.storage?.get(DATA_KEY, true);
-        parsed = r ? JSON.parse(r.value) : null;
-      } catch { parsed = null; }
-
-      if (cancelled) return;
-
-      if (!parsed) {
-        const seed = seedData();
-        try { await window.storage?.set(DATA_KEY, JSON.stringify(seed), true); } catch { if (!cancelled) setSaveError(true); }
-        if (!cancelled) { settledRef.current = true; setData(seed); setReady(true); }
+      if (!isSupabaseConfigured) {
+        setReady(true);
         return;
       }
 
-      const savedStatuses = parsed.statuses && parsed.statuses.length ? parsed.statuses : DEFAULT_STATUSES.map(s => ({ ...s }));
-      const missingStatuses = DEFAULT_STATUSES.filter(ds => !savedStatuses.some(s => s.id === ds.id));
-      const mergedStatuses = [...savedStatuses, ...missingStatuses.map(s => ({ ...s }))];
-      const merged = {
-        stores: parsed.stores || [],
-        categories: parsed.categories || [],
-        users: (parsed.users || []).map(normalizeUser),
-        tickets: (parsed.tickets || []).map(t => ({ budget: "", serviceNotes: "", updatedAt: t.createdAt, attestedBy: "", attestedAt: "", ...t })),
-        alerts: parsed.alerts || [],
-        statuses: mergedStatuses,
-        priorities: parsed.priorities && parsed.priorities.length ? parsed.priorities : DEFAULT_PRIORITIES.map(p => ({ ...p })),
-      };
+      // Quando não há usuário logado, não tenta disparar requisições protegidas por RLS
+      if (!currentUser) {
+        setData(EMPTY_DATA);
+        setReady(true);
+        return;
+      }
 
-      if (!cancelled) { settledRef.current = true; setData(merged); setReady(true); }
+      try {
+        const supabaseData = await loadSupabaseData();
+        if (!cancelled && supabaseData) {
+          setData(supabaseData);
+          setSaveError(false);
+          setReady(true);
+          return;
+        }
+      } catch (err) {
+        console.error("Erro ao carregar do Supabase:", err);
+      }
+
+      if (cancelled) return;
+      setSaveError(true);
+      setReady(true);
     })();
 
     return () => { cancelled = true; };
-  }, []);
+  }, [currentUser?.authId, currentUser?.id, currentUser?.email]);
 
-  // 3. Inicia escuta Realtime do Supabase
+  // Inicia escuta Realtime do Supabase quando autenticado
   useEffect(() => {
-    if (!ready || !isSupabaseConfigured) return;
+    if (!currentUser || !isSupabaseConfigured) return;
 
     const unsubscribe = subscribeToSupabase(async () => {
       setIsSyncing(true);
@@ -397,51 +283,55 @@ function useStore() {
     return () => {
       unsubscribe();
     };
-  }, [ready]);
+  }, [currentUser?.authId, currentUser?.id, currentUser?.email]);
 
-  function update(key, value) {
-    setData(prev => {
-      const next = { ...prev, [key]: value };
-      
-      // Sincroniza com Supabase em segundo plano
-      if (isSupabaseConfigured) {
-        syncKeyToSupabase(key, value).catch(err => {
-          console.error(`Erro ao sincronizar ${key} com Supabase:`, err);
-          setSaveError(true);
-        });
-      }
+  async function update(key, value, previousValue) {
+    setData(prev => ({ ...prev, [key]: value }));
 
-      // Mantém espelho no localStorage
-      try {
-        window.storage?.set(DATA_KEY, JSON.stringify(next), true)?.catch(() => setSaveError(true));
-      } catch {}
+    if (!isSupabaseConfigured) {
+      const result = { success: false, error: 'Supabase não configurado' };
+      setSaveError(true);
+      return result;
+    }
 
-      return next;
-    });
+    setIsSyncing(true);
+    const itemsToPersist = key === "users" && previousValue
+      ? value.filter(user => {
+          const previous = previousValue.find(item => item.id === user.id);
+          return !previous || previous.name !== user.name || previous.email !== user.email || previous.role !== user.role || previous.storeId !== user.storeId;
+        })
+      : value;
+    const result = await syncKeyToSupabase(key, itemsToPersist);
+    setIsSyncing(false);
+    if (!result.success) {
+      setSaveError(true);
+      if (previousValue !== undefined) setData(prev => ({ ...prev, [key]: previousValue }));
+    }
+    return result;
   }
 
-  return { data, ready, update, saveError, isSyncing, isCloud: isSupabaseConfigured };
+  return { data, ready, update, reloadData, saveError, isSyncing, isCloud: isSupabaseConfigured };
 }
 
 /* ------------------------------------------------------------------ */
 /* Tela de Login                                                       */
 /* ------------------------------------------------------------------ */
 
-function LoginScreen({ users, stores, onLogin, isCloud }) {
+function LoginScreen({ onLogin, isCloud }) {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     const cleanId = identifier.trim().toLowerCase();
     const cleanPass = password.trim();
 
     if (!cleanId) {
-      setError("Por favor, informe seu e-mail ou nome de usuário.");
+      setError("Por favor, informe seu e-mail de acesso.");
       return;
     }
     if (!cleanPass) {
@@ -450,33 +340,42 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
     }
 
     setLoading(true);
-    setTimeout(() => {
-      // Procura por email (case-insensitive) ou nome
-      const user = users.find(u =>
-        (u.email && u.email.trim().toLowerCase() === cleanId) ||
-        (u.name && u.name.trim().toLowerCase() === cleanId)
-      );
+    try {
+      if (isCloud) {
+        const { data: authData, error: authErr } = await signInWithSupabase(cleanId, cleanPass);
+        if (authErr) {
+          const msg = authErr.message || "";
+          if (msg.includes("Invalid login credentials") || msg.includes("invalid_grant")) {
+            setError("E-mail ou senha incorretos. Verifique suas credenciais.");
+          } else if (msg.includes("Email not confirmed")) {
+            setError("E-mail ainda não confirmado no Supabase Auth.");
+          } else {
+            setError(`Erro ao autenticar: ${msg}`);
+          }
+          setLoading(false);
+          return;
+        }
 
-      if (!user) {
-        setError("Usuário não encontrado. Verifique o e-mail digitado.");
-        setLoading(false);
-        return;
-      }
+        const authUser = authData?.user;
+        const profile = await fetchUserProfile(authUser);
 
-      const validPassword = user.password || (user.role === "admin" ? "admin" : "123");
-      if (cleanPass === validPassword) {
-        onLogin(user);
+        if (!profile) {
+          // Auth OK mas perfil não existe em app_users — não permite login fantasma
+          await signOutFromSupabase();
+          setError("Usuário autenticado, mas sem perfil cadastrado no sistema. Contate o administrador.");
+          setLoading(false);
+          return;
+        }
+
+        onLogin(profile);
       } else {
-        setError("Senha incorreta. Tente novamente.");
-        setLoading(false);
+        setError("Supabase não configurado.");
       }
-    }, 150);
-  }
-
-  function handleDemoLogin(u) {
-    setIdentifier(u.email || u.name);
-    setPassword(u.password || (u.role === "admin" ? "admin" : "123"));
-    setError("");
+    } catch (err) {
+      setError("Falha ao comunicar com o servidor de autenticação.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -485,14 +384,8 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
         
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold mb-4" style={{ backgroundColor: isCloud ? "rgba(14,122,74,0.2)" : "#222A38", color: isCloud ? "#34D399" : "#9CA3AF" }}>
-            <span className={`w-2 h-2 rounded-full ${isCloud ? 'bg-emerald-400 animate-pulse' : 'bg-gray-400'}`} />
-            {isCloud ? "Nuvem Conectada (Supabase)" : "Armazenamento Local"}
-          </div>
-
-          <div className="flex items-center justify-center gap-2 mb-2">
-            <span className="text-3xl font-extrabold" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>OS.</span>
-            <span className="text-3xl font-extrabold text-white">Painel</span>
+          <div className="flex items-center justify-center gap-2 mb-1">
+            <span className="text-4xl font-extrabold tracking-tight" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>Hellpp</span>
           </div>
           <h2 className="text-lg font-bold text-white mb-1">Central de Demandas</h2>
           <p className="text-xs" style={{ color: "#8A93A6" }}>Informe seu e-mail e senha para acessar o sistema</p>
@@ -509,16 +402,16 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
         {/* Form */}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-300 mb-1.5">E-mail ou Usuário</label>
+            <label className="block text-xs font-semibold text-gray-300 mb-1.5">E-mail de Acesso</label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                 <Mail size={16} />
               </span>
               <input
-                type="text"
+                type="email"
                 value={identifier}
                 onChange={e => setIdentifier(e.target.value)}
-                placeholder="ex: admin@empresa.com ou loja1@empresa.com"
+                placeholder="ex: seu-email@empresa.com"
                 className="w-full pl-9 pr-3 py-2.5 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition"
                 style={{ backgroundColor: "#101622", border: "1px solid #2B3445" }}
                 autoFocus
@@ -553,78 +446,67 @@ function LoginScreen({ users, stores, onLogin, isCloud }) {
           <button
             type="submit"
             disabled={loading}
-            className="w-full mt-2 py-3 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2 shadow-lg"
+            className="w-full mt-2 py-3 rounded-lg text-sm font-semibold text-white transition flex items-center justify-center gap-2 shadow-lg cursor-pointer"
             style={{ backgroundColor: "var(--accent)", opacity: loading ? 0.7 : 1 }}
           >
             {loading ? <Loader2 size={18} className="animate-spin" /> : <KeyRound size={16} />}
-            {loading ? "Entrando..." : "Entrar no Sistema"}
+            {loading ? "Autenticando..." : "Entrar no Sistema"}
           </button>
         </form>
-
-        {/* Demo / Quick helper */}
-        {users && users.length > 0 && (
-          <div className="mt-8 pt-6" style={{ borderTop: "1px solid #2B3445" }}>
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide text-center mb-3">
-              Acessos Rápidos (Demonstração / Teste):
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {users.slice(0, 4).map(u => (
-                <button
-                  key={u.id}
-                  type="button"
-                  onClick={() => handleDemoLogin(u)}
-                  className="flex items-center justify-between px-3 py-2 rounded-lg text-xs transition text-left hover:bg-emerald-950/30"
-                  style={{ backgroundColor: "#101622", border: "1px solid #2B3445", color: "#CBD5E1" }}
-                >
-                  <div className="flex items-center gap-2 truncate">
-                    <span className="font-semibold text-white">{u.name}</span>
-                    <span className="text-[10px] text-gray-400">({u.email})</span>
-                  </div>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ backgroundColor: u.role === 'admin' ? 'rgba(14,110,93,0.3)' : 'rgba(34,85,201,0.2)', color: u.role === 'admin' ? '#34D399' : '#93C5FD' }}>
-                    {u.role === 'admin' ? 'Admin' : 'Loja'}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
-function useCurrentUser(ready, users) {
-  const [currentUserId, setCurrentUserId] = useState(() => {
-    try {
-      return localStorage.getItem(CURRENT_USER_KEY) || "";
-    } catch { return ""; }
-  });
+function useCurrentUser() {
+  const [sessionUser, setSessionUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
-    if (!ready || !users.length) return;
-    if (currentUserId && !users.some(u => u.id === currentUserId)) {
-      setCurrentUserId("");
-      try { localStorage.removeItem(CURRENT_USER_KEY); } catch {}
+    let mounted = true;
+
+    (async () => {
+      if (isSupabaseConfigured) {
+        try {
+          const { user } = await getSupabaseSession();
+          if (mounted && user) {
+            const profile = await fetchUserProfile(user);
+            if (mounted && profile) setSessionUser(profile);
+          }
+        } catch (e) {
+          console.warn("Erro ao recuperar sessão do Supabase:", e);
+        }
+      }
+      if (mounted) setAuthChecked(true);
+    })();
+
+    const { data: authListener } = onSupabaseAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        const profile = await fetchUserProfile(session.user);
+        if (mounted && profile) setSessionUser(profile);
+      } else if (event === "SIGNED_OUT") {
+        if (mounted) setSessionUser(null);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      authListener?.subscription?.unsubscribe?.();
+    };
+  }, []);
+
+  function loginUser(user) {
+    setSessionUser(user);
+  }
+
+  async function logoutUser() {
+    if (isSupabaseConfigured) {
+      await signOutFromSupabase().catch(() => {});
     }
-  }, [ready, users, currentUserId]);
-
-  function loginUser(id) {
-    setCurrentUserId(id);
-    try {
-      localStorage.setItem(CURRENT_USER_KEY, id);
-      window.storage?.set(CURRENT_USER_KEY, JSON.stringify(id), false)?.catch(() => {});
-    } catch {}
+    setSessionUser(null);
   }
 
-  function logoutUser() {
-    setCurrentUserId("");
-    try {
-      localStorage.removeItem(CURRENT_USER_KEY);
-      window.storage?.delete?.(CURRENT_USER_KEY)?.catch(() => {});
-    } catch {}
-  }
-
-  return { currentUserId, loginUser, logoutUser };
+  return { currentUser: sessionUser, authChecked, loginUser, logoutUser };
 }
 
 /* ------------------------------------------------------------------ */
@@ -647,8 +529,7 @@ function Sidebar({ view, setView, counts, currentUser, stores, onLogout }) {
       <div>
         <div className="px-5 pt-6 pb-5">
           <div className="flex items-baseline gap-1">
-            <span className="text-lg font-bold" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>OS.</span>
-            <span className="text-lg font-bold text-white">Painel</span>
+            <span className="text-xl font-extrabold tracking-tight" style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>Hellpp</span>
           </div>
           <p className="text-xs mt-0.5" style={{ color: "#8A93A6" }}>
             {isAdmin ? "Central Administrativa Geral" : (userStore?.name || "Painel da Loja")}
@@ -704,6 +585,7 @@ function Sidebar({ view, setView, counts, currentUser, stores, onLogout }) {
     </div>
   );
 }
+
 
 /* ------------------------------------------------------------------ */
 /* Dashboard                                                            */
@@ -1443,7 +1325,7 @@ function TicketsView({ data, update, currentUser, initialFilters, initialOpenId 
         )}
       </div>
 
-      {filtered.length === 0 ? <EmptyState icon={<ClipboardList size={32} />} title="Nenhuma demanda encontrada" sub="Ajuste os filtros ou crie uma nova demanda." /> : (
+      {filtered.length === 0 ? <EmptyState icon={<ClipboardList size={32} />} title="Nenhuma demanda encontrada" sub="Ajuste os filtros e clique em Consultar, ou crie uma nova demanda." /> : (
         <div className="flex flex-col gap-2.5">{filtered.map(t => <TicketCard key={t.id} t={t} data={data} onOpen={() => setOpenTicket(t)} />)}</div>
       )}
 
@@ -1688,23 +1570,82 @@ function CategoryFormModal({ initial, onCancel, onSave }) {
 function UsersView({ data, update }) {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
-  function save(f) {
+  const [saving, setSaving] = useState(false);
+
+  async function save(f) {
     const payload = {
+      id: editing?.id || uid(),
       name: f.name.trim(),
       email: f.email.trim().toLowerCase(),
-      password: f.password?.trim() || (f.role === "admin" ? "admin" : "123"),
+      password: f.password ? f.password.trim() : "",
       role: f.role,
       storeId: f.role === "admin" ? "" : (f.storeId || "")
     };
-    if (editing) update("users", data.users.map(u => u.id === editing.id ? { ...u, ...payload } : u));
-    else update("users", [...data.users, { id: uid(), ...payload }]);
-    setShowForm(false); setEditing(null);
+
+    const duplicate = data.users.find(user =>
+      user.email?.trim().toLowerCase() === payload.email && user.id !== editing?.id
+    );
+    if (duplicate) {
+      alert("Já existe um usuário cadastrado com este e-mail.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      if (isSupabaseConfigured) {
+        const res = await rpcAdminCreateOrUpdateUser(payload);
+        if (!res.success) {
+          alert(`Erro ao salvar usuário no Supabase: ${res.error}`);
+          setSaving(false);
+          return;
+        }
+        if (res.data?.id) payload.id = res.data.id;
+        if (res.data?.auth_id) payload.authId = res.data.auth_id;
+      }
+
+      const cleanUser = {
+        id: payload.id,
+        authId: payload.authId || editing?.authId || null,
+        name: payload.name,
+        email: payload.email,
+        role: payload.role,
+        storeId: payload.storeId
+      };
+
+      const users = editing
+        ? data.users.map(u => u.id === editing.id ? { ...u, ...cleanUser } : u)
+        : [...data.users, cleanUser];
+
+      const result = await update("users", users, data.users);
+      if (!result.success) {
+        alert("Não foi possível sincronizar o usuário na tela. Recarregue a página.");
+      }
+      setShowForm(false);
+      setEditing(null);
+    } catch (err) {
+      alert("Erro ao processar requisição de usuário.");
+    } finally {
+      setSaving(false);
+    }
   }
-  function remove(id) {
+
+  async function remove(id) {
     const u = data.users.find(x => x.id === id);
-    if (u?.role === "admin" && data.users.filter(x => x.role === "admin").length <= 1) { alert("Deve existir ao menos um usuário administrador."); return; }
-    update("users", data.users.filter(u => u.id !== id));
+    if (u?.role === "admin" && data.users.filter(x => x.role === "admin").length <= 1) {
+      alert("Deve existir ao menos um usuário administrador.");
+      return;
+    }
+    if (!confirm(`Deseja realmente excluir o usuário "${u?.name || id}"?`)) return;
+
+    const deletion = await deleteUserFromSupabase(id);
+    if (!deletion.success) {
+      alert("Não foi possível excluir o usuário no Supabase. Tente novamente.");
+      return;
+    }
+    const result = await update("users", data.users.filter(u => u.id !== id));
+    if (!result.success) alert("O usuário foi excluído no Supabase, mas a tela não pôde ser atualizada. Recarregue a página.");
   }
+
   return (
     <>
       <div className="flex items-center justify-between mb-4">
@@ -1714,36 +1655,49 @@ function UsersView({ data, update }) {
       <div className="flex flex-col gap-2">
         {data.users.map(u => (
           <div key={u.id} className="rounded-xl p-3.5 flex items-center gap-3" style={{ backgroundColor: "var(--surface)", border: "1px solid var(--border)" }}>
-            <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent-ink)" }}>{u.name.split(" ").map(n => n[0]).slice(0, 2).join("")}</div>
+            <div className="w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ backgroundColor: "var(--accent-soft)", color: "var(--accent-ink)" }}>
+              {u.name.split(" ").map(n => n[0]).slice(0, 2).join("")}
+            </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <p className="text-sm font-semibold truncate" style={{ color: "var(--ink)" }}>{u.name}</p>
                 <Pill label={ROLES.find(r => r.id === u.role)?.label} color="var(--accent)" soft="var(--accent-soft)" />
               </div>
               <p className="text-xs truncate mt-0.5" style={{ color: "var(--faint)" }}>
-                <strong>Login:</strong> {u.email} · <strong>Senha:</strong> <span className="font-mono text-gray-700 bg-gray-100 px-1 py-0.5 rounded">{u.password || "123"}</span> · {u.role === "admin" ? "Acesso total" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
+                <strong>Login:</strong> {u.email} · {u.role === "admin" ? "Acesso total (Administrador)" : (data.stores.find(s => s.id === u.storeId)?.name || "Sem loja vinculada")}
               </p>
             </div>
-            <div className="flex gap-1"><IconBtn onClick={() => { setEditing(u); setShowForm(true); }} title="Editar dados e senha"><Pencil size={15} /></IconBtn><IconBtn onClick={() => remove(u.id)} title="Excluir usuário"><Trash2 size={15} /></IconBtn></div>
+            <div className="flex gap-1">
+              <IconBtn onClick={() => { setEditing(u); setShowForm(true); }} title="Editar dados do usuário"><Pencil size={15} /></IconBtn>
+              <IconBtn onClick={() => remove(u.id)} title="Excluir usuário"><Trash2 size={15} /></IconBtn>
+            </div>
           </div>
         ))}
       </div>
-      {showForm && <UserFormModal initial={editing} stores={data.stores} onCancel={() => { setShowForm(false); setEditing(null); }} onSave={save} />}
+      {showForm && (
+        <UserFormModal
+          initial={editing}
+          stores={data.stores}
+          saving={saving}
+          onCancel={() => { setShowForm(false); setEditing(null); }}
+          onSave={save}
+        />
+      )}
     </>
   );
 }
 
-function UserFormModal({ initial, stores, onCancel, onSave }) {
+function UserFormModal({ initial, stores, saving, onCancel, onSave }) {
   const [f, setF] = useState(initial ? {
     name: initial.name,
     email: initial.email,
-    password: initial.password || "123",
+    password: "",
     role: initial.role,
     storeId: initial.storeId || ""
   } : {
     name: "",
     email: "",
-    password: "123",
+    password: "",
     role: "loja",
     storeId: stores[0]?.id || ""
   });
@@ -1755,13 +1709,16 @@ function UserFormModal({ initial, stores, onCancel, onSave }) {
       <div className="flex flex-col gap-3">
         <Field label="Nome completo"><TextInput value={f.name} onChange={e => set("name", e.target.value)} placeholder="Ex: Carlos Mendes" /></Field>
         <Field label="E-mail de acesso (Login)"><TextInput type="email" value={f.email} onChange={e => set("email", e.target.value)} placeholder="ex: loja1@empresa.com" /></Field>
-        <Field label="Senha de acesso" hint="Senha usada por este usuário para entrar na Central de Demandas.">
+        <Field
+          label="Senha de acesso"
+          hint={initial ? "Deixe em branco para manter a senha atual inalterada." : "Defina a senha inicial de acesso para o usuário."}
+        >
           <div className="relative">
             <TextInput
               type={showPass ? "text" : "password"}
               value={f.password}
               onChange={e => set("password", e.target.value)}
-              placeholder="Digite a senha"
+              placeholder={initial ? "Nova senha (opcional)" : "Digite a senha inicial"}
             />
             <button
               type="button"
@@ -1787,7 +1744,12 @@ function UserFormModal({ initial, stores, onCancel, onSave }) {
         )}
         <div className="flex justify-end gap-2 mt-2">
           <Button variant="outline" onClick={onCancel}>Cancelar</Button>
-          <Button onClick={() => onSave(f)} disabled={!f.name.trim() || !f.email.trim() || !f.password?.trim() || (f.role === "loja" && !f.storeId)}>Salvar</Button>
+          <Button
+            onClick={() => onSave(f)}
+            disabled={saving || !f.name.trim() || !f.email.trim() || (!initial && !f.password?.trim()) || (f.role === "loja" && !f.storeId)}
+          >
+            {saving ? "Salvando..." : "Salvar"}
+          </Button>
         </div>
       </div>
     </Modal>
@@ -2034,9 +1996,8 @@ function AdminView({ data, update }) {
 /* ------------------------------------------------------------------ */
 
 export default function App() {
-  const { data, ready, update } = useStore();
-  const { currentUserId, loginUser, logoutUser } = useCurrentUser(ready, data.users);
-  const currentUser = data.users.find(u => u.id === currentUserId) || null;
+  const { currentUser, loginUser, logoutUser, authChecked } = useCurrentUser();
+  const { data, ready, update } = useStore(currentUser);
   const [view, setView] = useState("dashboard");
   const [ticketsNav, setTicketsNav] = useState({ filters: null, openId: null });
   const [loginNotice, setLoginNotice] = useState(null);
@@ -2057,24 +2018,12 @@ export default function App() {
     if ((view === "admin" || view === "reports") && ready && currentUser && currentUser.role !== "admin") setView("dashboard");
   }, [view, ready, currentUser]);
 
-  // Ao logar, avisa quantas demandas precisam de atenção
+  // Sem persistência no navegador, a sessão atual inicia a contagem de avisos.
   useEffect(() => {
     if (!ready || !currentUser) return;
     if (loginCheckedRef.current === currentUser.id) return;
     loginCheckedRef.current = currentUser.id;
-    (async () => {
-      let map = {};
-      try { const r = await window.storage.get(LAST_LOGIN_KEY, false); map = r ? JSON.parse(r.value) : {}; } catch { map = {}; }
-      const previous = map[currentUser.id];
-      setSinceLogin(previous || null);
-      if (previous) {
-        const scoped = currentUser.role === "admin" ? data.tickets : data.tickets.filter(t => t.storeId === currentUser.storeId);
-        const count = scoped.filter(t => !isClosedStatus(data, t.status) && t.updatedAt && t.updatedAt > previous).length;
-        if (count > 0) setLoginNotice({ count });
-      }
-      map[currentUser.id] = new Date().toISOString();
-      window.storage.set(LAST_LOGIN_KEY, JSON.stringify(map), false).catch(() => {});
-    })();
+    setSinceLogin(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, currentUser?.id]);
 
@@ -2088,10 +2037,10 @@ export default function App() {
   }
   function goToAlerts() { setView("alerts"); }
 
-  if (!ready) {
+  if (!authChecked || !ready) {
     return (
       <div className="w-full h-screen flex items-center justify-center" style={{ backgroundColor: "var(--bg)" }}>
-        <style>{TOKENS}</style>
+        
         <Loader2 className="animate-spin" size={22} color="var(--accent)" />
       </div>
     );
@@ -2103,9 +2052,7 @@ export default function App() {
       <>
         <style>{TOKENS}</style>
         <LoginScreen
-          users={data.users}
-          stores={data.stores}
-          onLogin={user => loginUser(user.id)}
+          onLogin={user => loginUser(user)}
           isCloud={isSupabaseConfigured}
         />
       </>
