@@ -3,7 +3,12 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey && supabaseUrl !== 'SUA_URL_DO_SUPABASE_AQUI');
+export const isSupabaseConfigured = Boolean(
+  supabaseUrl &&
+  supabaseAnonKey &&
+  supabaseUrl !== 'SUA_URL_DO_SUPABASE_AQUI' &&
+  supabaseAnonKey.startsWith('eyJ')
+);
 
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
@@ -12,10 +17,14 @@ export const supabase = isSupabaseConfigured
 // Autenticação Real via Supabase Auth
 export async function signInWithSupabase(email, password) {
   if (!supabase) return { data: null, error: new Error("Supabase não configurado") };
-  return await supabase.auth.signInWithPassword({
+  const result = await supabase.auth.signInWithPassword({
     email: (email || '').trim().toLowerCase(),
     password: password || ''
   });
+  if (result.error) {
+    console.error('[Auth] Falha no login:', result.error.message);
+  }
+  return result;
 }
 
 export async function signOutFromSupabase() {
@@ -36,49 +45,71 @@ export function onSupabaseAuthStateChange(callback) {
 }
 
 // Busca o perfil do usuário na tabela app_users (com role, store_id e nome)
+// Estratégia: busca primeiro por auth_id (mais seguro), depois fallback por email exato.
+// Retorna null se nenhum perfil for encontrado — impede login sem perfil cadastrado.
 export async function fetchUserProfile(authUser) {
   if (!authUser || !supabase) return null;
-  try {
-    const authId = authUser.id;
-    const authEmail = (authUser.email || '').trim().toLowerCase();
 
-    const { data, error } = await supabase
+  const authId = authUser.id;
+  const authEmail = (authUser.email || '').trim().toLowerCase();
+
+  try {
+    // 1. Busca primária: por auth_id (vínculo direto, mais seguro)
+    const { data: byAuthId, error: err1 } = await supabase
       .from('app_users')
       .select('*')
-      .or(`auth_id.eq.${authId},email.ilike.${authEmail}`)
-      .limit(1)
+      .eq('auth_id', authId)
       .maybeSingle();
 
-    if (data) {
-      if (!data.auth_id && authId) {
+    if (err1) {
+      console.warn('[Auth] Erro ao buscar perfil por auth_id:', err1.message);
+    }
+
+    if (byAuthId) {
+      return buildProfile(byAuthId, authId);
+    }
+
+    // 2. Fallback: busca por email exato (case-insensitive)
+    if (authEmail) {
+      const { data: byEmail, error: err2 } = await supabase
+        .from('app_users')
+        .select('*')
+        .ilike('email', authEmail)
+        .maybeSingle();
+
+      if (err2) {
+        console.warn('[Auth] Erro ao buscar perfil por email:', err2.message);
+      }
+
+      if (byEmail) {
+        // Vincula o auth_id ao perfil encontrado para futuras buscas diretas
         supabase
           .from('app_users')
           .update({ auth_id: authId })
-          .eq('id', data.id)
-          .then(() => {})
+          .eq('id', byEmail.id)
+          .then(() => console.log('[Auth] auth_id vinculado ao perfil existente.'))
           .catch(() => {});
-      }
 
-      return {
-        id: data.id,
-        authId: authId,
-        email: data.email || authUser.email,
-        name: data.name || authUser.user_metadata?.name || (authUser.email ? authUser.email.split('@')[0] : 'Usuário'),
-        role: data.role || authUser.user_metadata?.role || 'loja',
-        storeId: data.store_id || data.storeId || ''
-      };
+        return buildProfile(byEmail, authId);
+      }
     }
   } catch (err) {
-    console.warn('Erro ao buscar perfil em app_users:', err);
+    console.error('[Auth] Erro inesperado ao buscar perfil:', err);
   }
 
+  // Nenhum perfil encontrado — retorna null para impedir login fantasma
+  console.warn('[Auth] Nenhum perfil encontrado em app_users para:', authEmail);
+  return null;
+}
+
+function buildProfile(data, authId) {
   return {
-    id: authUser.id,
-    authId: authUser.id,
-    email: authUser.email,
-    name: authUser.user_metadata?.name || (authUser.email ? authUser.email.split('@')[0] : 'Usuário'),
-    role: authUser.user_metadata?.role || 'loja',
-    storeId: authUser.user_metadata?.store_id || ''
+    id: data.id,
+    authId: authId,
+    email: data.email,
+    name: data.name || 'Usuário',
+    role: data.role || 'loja',
+    storeId: data.store_id || data.storeId || ''
   };
 }
 
@@ -97,7 +128,7 @@ export async function rpcAdminCreateOrUpdateUser({ id, email, password, name, ro
     if (error) throw error;
     return { success: true, data };
   } catch (err) {
-    console.error("Erro na criação/atualização segura de usuário via RPC:", err);
+    console.error("[Auth] Erro na criação/atualização segura de usuário via RPC:", err);
     return { success: false, error: err.message || err };
   }
 }
@@ -112,7 +143,7 @@ export async function rpcAdminDeleteUser(userId) {
     if (error) throw error;
     return { success: true, data };
   } catch (err) {
-    console.error("Erro na exclusão de usuário via RPC:", err);
+    console.error("[Auth] Erro na exclusão de usuário via RPC:", err);
     return { success: false, error: err.message || err };
   }
 }

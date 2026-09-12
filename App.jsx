@@ -19,27 +19,7 @@ import {
   rpcAdminCreateOrUpdateUser
 } from "./lib/supabaseSync.js";
 
-const TOKENS = `
-  :root{
-    --bg:#F3F4F7;
-    --surface:#FFFFFF;
-    --ink:#161B26;
-    --muted:#6B7280;
-    --faint:#9CA3AF;
-    --border:#E4E6EB;
-    --accent:#0E6E5D;
-    --accent-ink:#0B584A;
-    --accent-soft:#E4F2EF;
-    --danger:#D0342C;
-    --danger-soft:#FBE9E8;
-    --warn:#B4650A;
-    --warn-soft:#FBEEDF;
-    --ok:#0E7A4A;
-    --ok-soft:#E4F5EC;
-    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, monospace;
-  }
-`;
+/* Design tokens definidos em index.css — não duplicar aqui */
 
 const RECURRENCES = [
   { id: "none", label: "Não repete" },
@@ -378,6 +358,15 @@ function LoginScreen({ onLogin, isCloud }) {
 
         const authUser = authData?.user;
         const profile = await fetchUserProfile(authUser);
+
+        if (!profile) {
+          // Auth OK mas perfil não existe em app_users — não permite login fantasma
+          await signOutFromSupabase();
+          setError("Usuário autenticado, mas sem perfil cadastrado no sistema. Contate o administrador.");
+          setLoading(false);
+          return;
+        }
+
         onLogin(profile);
       } else {
         setError("Supabase não configurado.");
@@ -2051,7 +2040,7 @@ export default function App() {
   if (!authChecked || !ready) {
     return (
       <div className="w-full h-screen flex items-center justify-center" style={{ backgroundColor: "var(--bg)" }}>
-        <style>{TOKENS}</style>
+        
         <Loader2 className="animate-spin" size={22} color="var(--accent)" />
       </div>
     );
